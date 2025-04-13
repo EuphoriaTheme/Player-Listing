@@ -1,0 +1,37 @@
+info:
+  name: "Player Listing"
+  identifier: "playerlisting"
+  description: "Player Listing Addon using Blueprint!"
+  flags: ""
+  version: "v1.5.2"
+  target: "beta-2024-12"
+  author: "Euphoria Development"
+  icon: "playerlisting_icon.jpg"
+  website: "https://euphoriadevelopment.uk"
+
+admin:
+  view: "admin/view.blade.php"
+  controller: "admin/Controller.php"
+  css: ""
+  wrapper: "admin/wrapper.blade.php"
+
+dashboard:
+  css: ""
+  wrapper: "client/wrapper.blade.php"
+  components: "components"
+
+data:
+  directory: ""
+  public: "public"
+  console: ""
+
+requests:
+  views: "src/views"
+  controllers: ""
+  routers:
+    application: ""
+    client: ""
+    web: "routes/web.php"
+
+database:
+  migrations: ""
