@@ -11,9 +11,9 @@ info:
 
 admin:
   view: "admin/view.blade.php"
-  controller: "admin/Controller.php"
+  controller: ""
   css: ""
-  wrapper: "admin/wrapper.blade.php"
+  wrapper: ""
 
 dashboard:
   css: ""
@@ -26,7 +26,7 @@ data:
   console: ""
 
 requests:
-  views: "src/views"
+  views: ""
   controllers: ""
   routers:
     application: ""
