@@ -204,29 +204,12 @@ const fetchPlayers: React.FC = () => {
         setError(null);
     
         try {
-            // Step 1: Fetch user profile data
-            const profileResponse = await fetch('/extensions/playerlisting/user/profile', {
-                method: 'GET',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRF-TOKEN': csrfToken ?? '',
-                },
-            });
-    
-            if (!profileResponse.ok) {
-                throw new Error('Failed to fetch user profile data.');
-            }
-    
-            const profileData = await profileResponse.json();
-            const { productId, hwid, licenseKey } = profileData;
-
             const queryPort = customPort ? Number(customPort) : port;
     
             // Step 2: Construct the API URL
             const targetURL = `/${selectedGame}/ip=${ip}&port=${queryPort}`;
-            const apiURL = `${BACKEND_API_URL}${targetURL}?productId=${encodeURIComponent(productId)}&hwid=${encodeURIComponent(hwid)}&licenseKey=${encodeURIComponent(licenseKey)}&source=${encodeURIComponent(window.location.hostname)}`;
+            const apiURL = `${BACKEND_API_URL}${targetURL}`;
 
-    
             // Step 3: Make the API call with the forwarded data
             const response = await fetch(apiURL, {
                 method: 'GET', // Use GET since we're sending data as query parameters

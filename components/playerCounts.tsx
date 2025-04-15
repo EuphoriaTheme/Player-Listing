@@ -54,25 +54,9 @@ const PlayerCounts: React.FC = () => {
             setLoading(true);
             setError(null);
 
-            // Step 1: Fetch user profile data
-            const profileResponse = await fetch('/extensions/playerlisting/user/profile', {
-                method: 'GET',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRF-TOKEN': csrfToken ?? '',
-                },
-            });
-
-            if (!profileResponse.ok) {
-                throw new Error('Failed to fetch user profile data.');
-            }
-    
-            const profileData = await profileResponse.json();
-            const { productId, hwid, licenseKey } = profileData;
-
             try {
                 const targetURL = `/${selectedGame}/ip=${ip}&port=${port}`;
-                const apiURL = `${BACKEND_API_URL}${targetURL}?productId=${encodeURIComponent(productId)}&hwid=${encodeURIComponent(hwid)}&licenseKey=${encodeURIComponent(licenseKey)}&source=${encodeURIComponent(window.location.hostname)}`;
+                const apiURL = `${BACKEND_API_URL}${targetURL}`;
                 const response = await fetch(apiURL);
 
                 if (!response.ok) {
