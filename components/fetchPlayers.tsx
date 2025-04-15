@@ -210,6 +210,7 @@ const fetchPlayers: React.FC = () => {
             const targetURL = `/${selectedGame}/ip=${ip}&port=${queryPort}`;
             const apiURL = `${BACKEND_API_URL}${targetURL}`;
 
+    
             // Step 3: Make the API call with the forwarded data
             const response = await fetch(apiURL, {
                 method: 'GET', // Use GET since we're sending data as query parameters
