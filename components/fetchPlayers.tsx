@@ -137,7 +137,7 @@ const fetchPlayers: React.FC = () => {
 
     const closeInfoModal = () => setShowInfoModal(false);
     
-    const BACKEND_API_URL = (window as any).SiteConfiguration.api_url || 'https://euphoriatheme.uk/api';
+    const BACKEND_API_URL = (window as any).SiteConfiguration.api_url || 'https://api.euphoriatheme.uk/api';
   
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
     const serverUuid = uuid;

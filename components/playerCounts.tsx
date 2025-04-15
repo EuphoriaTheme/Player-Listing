@@ -15,7 +15,7 @@ const PlayerCounts: React.FC = () => {
     const [serverDataLoading, setServerDataLoading] = useState<boolean>(true);
 
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
-    const BACKEND_API_URL = (window as any).SiteConfiguration.api_url || 'https://euphoriatheme.uk/api';
+    const BACKEND_API_URL = (window as any).SiteConfiguration.api_url || 'https://api.euphoriatheme.uk/api';
 
     useEffect(() => {
         const fetchServerData = async () => {
