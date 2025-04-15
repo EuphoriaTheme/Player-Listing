@@ -290,6 +290,57 @@ const fetchPlayers: React.FC = () => {
                     } else {
                         setError('Server is offline.');
                     }
+                } else if (selectedGame === 'rust') {
+                    if (serverUuid) {
+                        try {
+                            // Send the 'listplayers' command to the Pterodactyl panel
+                            const response = await fetch(`${BACKEND_API_URL}/api/client/servers/${serverUuid}/command`, {
+                                method: 'POST',
+                                headers: {
+                                    'X-CSRF-TOKEN': csrfToken ?? '',
+                                    'Content-Type': 'application/json',
+                                    'Accept': 'application/json',
+                                },
+                                body: JSON.stringify({ command: 'listplayers' }),
+                            });
+                
+                            if (response.ok) {
+                                const commandResponse = await response.json();
+                                const output = commandResponse.data; // Assuming the response contains the command output in 'data'
+                
+                                // Parse the output to extract player information
+                                const playerRegex = /(\d+)\s+([\w\s]+)\s+(\d+)\s+\d+\s+\d+/g; // Regex to match "id name ping updt dist"
+                                const players: Player[] = [];
+                                let match;
+                
+                                while ((match = playerRegex.exec(output)) !== null) {
+                                    players.push({
+                                        name: match[2].trim(), // Player name
+                                        uuid: match[1], // Player ID
+                                        ping: parseInt(match[3], 10), // Player ping
+                                    });
+                                }
+                
+                                setPlayers(players);
+                                setNumPlayers(players.length);
+                
+                                // Set server stats (max players, num players, ping)
+                                if (commandResponse.success && commandResponse.data) {
+                                    const gameData = commandResponse.data;
+                                    setMaxPlayers(gameData.maxplayers || 100); // Default to 100 if not provided
+                                    setNumPlayers(players.length); // Use the parsed player count
+                                    setPing(gameData.ping || 0); // Default to 0 if not provided
+                                }
+                            } else {
+                                setError('Failed to fetch player data from the Rust server.');
+                            }
+                        } catch (err) {
+                            console.error('An error occurred while fetching Rust player data:', err);
+                            setError('An error occurred while fetching Rust player data.');
+                        }
+                    } else {
+                        setError('Server UUID is not available.');
+                    }
                 } else if (selectedGame === 'beammp') {
                     if (data.success && data.data) {
                         const beammpData = data.data;
