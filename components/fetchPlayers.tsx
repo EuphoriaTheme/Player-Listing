@@ -1,82 +1,41 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import getServer, { Server } from '@/api/server/getServer';
+import getServer from '@/api/server/getServer';
 import { ServerContext } from '@/state/server';
 import ReactDOM from 'react-dom';
 import ServerContentBlock from '@/components/elements/ServerContentBlock';
-
-// Define the full list of game options
-const gameOptions = [
-    { id: 'a2oa', name: 'ARMA 2: Operation Arrowhead' },
-    { id: 'arma2', name: 'ARMA 2' },
-    { id: 'arma3', name: 'ARMA 3' },
-    { id: 'armareforger', name: 'ARMA: Reforger' },
-    { id: 'armaresistance', name: 'ARMA: Resistance' },
-    { id: 'asa', name: 'Ark: Survival Ascended' },
-    { id: 'ase', name: 'Ark: Survival Evolved' },
-    { id: 'atlas', name: 'Atlas' },
-    { id: 'beammp', name: 'BeamMP (2021)' },
-    { id: 'blackmesa', name: 'Black Mesa' },
-    { id: 'counterstrike15', name: 'Counter-Strike 1.5' },
-    { id: 'counterstrike16', name: 'Counter-Strike 1.6' },
-    { id: 'counterstrike2', name: 'Counter-Strike 2' },
-    { id: 'cscz', name: 'Counter-Strike: Condition Zero' },
-    { id: 'csgo', name: 'Counter-Strike: Global Offensive' },
-    { id: 'css', name: 'Counter-Strike: Source' },
-    { id: 'dayz', name: 'DayZ' },
-    { id: 'doi', name: 'Day of Infamy' },
-    { id: 'eco', name: 'Eco' },
-    { id: 'garrysmod', name: 'Garry\'s Mod' },
-    { id: 'groundbreach', name: 'Ground Breach' },
-    { id: 'gta5am', name: 'Grand Theft Auto V - alt:V Multiplayer' },
-    { id: 'gta5f', name: 'Grand Theft Auto V - FiveM' },
-    { id: 'gta5r', name: 'Grand Theft Auto V - RageMP' },
-    { id: 'insurgency', name: 'Insurgency' },
-    { id: 'insurgencysandstorm', name: 'Insurgency: Sandstorm' },
-    { id: 'killingfloor', name: 'Killing Floor' },
-    { id: 'killingfloor2', name: 'Killing Floor 2' },
-    { id: 'l4d', name: 'Left 4 Dead' },
-    { id: 'l4d2', name: 'Left 4 Dead 2' },
-    { id: 'mordhau', name: 'Mordhau' },
-    { id: 'minecraft', name: 'Minecraft' },
-    { id: 'projectzomboid', name: 'Project Zomboid' },
-    { id: 'rust', name: 'Rust' },
-    { id: 'spaceengineers', name: 'Space Engineers' },
-    { id: 'squad', name: 'Squad' },
-    { id: 'starbound', name: 'Starbound' },
-    { id: 'starmade', name: 'StarMade' },
-    { id: 'theforest', name: 'The Forest' },
-    { id: 'unturned', name: 'Unturned' },
-    { id: 'valheim', name: 'Valheim' },
-    { id: 'vrising', name: 'V Rising' },
-];
 
 // Define interfaces
 interface Player {
     name: string;
     uuid: string;
     ping: number;
-    discord?: string; // Optional properties for gta5f
+    discord?: string;
     steam?: string;
     identifier?: string;
 }
-interface FiveMPlayer {
-    endpoint: string;
-    id: number;
-    identifiers: string[];
+
+interface BannedPlayerInfo {
+    uuid: string;
     name: string;
-    ping: number;
+    created: string;
+    source: string;
+    expires: string;
+    reason: string;
+    avatarUrl?: string | null;
 }
-interface ApiResponse {
-    online: boolean;
-    maxplayers: number;
-    players: { name: string; raw: { id: string } }[];
-    connect: string;
-    ping: number;
-    numplayers: number;
+
+interface EggGameMapping {
+    egg_id: number;
+    game_id: string;
+    game_name: string;
 }
-interface FiveMResponse {
-    players: FiveMPlayer[];
-    sv_maxclients: number;
+
+// Support both string and object formats
+type EggGameMappingData = string | EggGameMapping;
+
+interface GameOption {
+    id: string;
+    name: string;
 }
 
 const fetchPlayers: React.FC = () => {
@@ -88,7 +47,7 @@ const fetchPlayers: React.FC = () => {
     const [ip, setIp] = useState<string>('');
     const [port, setPort] = useState<number>(0);
     const uuid = ServerContext.useStoreState((state) => state.server.data?.uuid || null);
-    const [customPort, setCustomPort] = useState<string | null>(null); // Initialize as null
+    const [customPort, setCustomPort] = useState<string | null>(null);
     const [ping, setPing] = useState<number | null>(null);
     const [selectedGame, setSelectedGame] = useState<string | null>(null);
     const [copiedUUIDs, setCopiedUUIDs] = useState<Record<string, boolean>>({});
@@ -99,17 +58,538 @@ const fetchPlayers: React.FC = () => {
     const [showInfoModal, setShowInfoModal] = useState(false);
     const [selectedBannedPlayer, setSelectedBannedPlayer] = useState<BannedPlayerInfo | null>(null);
     const [minecraftAvatars, setMinecraftAvatars] = useState<Record<string, string | null>>({});
-    const [serverDataLoading, setServerDataLoading] = useState<boolean>(true);  // Loading state for fetchServerData
-    const [kickBanReason, setKickBanReason] = useState<string>(''); // State for reason
-    interface BannedPlayerInfo {
-        uuid: string;
-        name: string;
-        created: string;
-        source: string;
-        expires: string;
-        reason: string;
-        avatarUrl?: string | null; // Optional avatar URL
-    }
+    const [serverDataLoading, setServerDataLoading] = useState<boolean>(true);
+    const [kickBanReason, setKickBanReason] = useState<string>('');
+    const [eggGameMappings, setEggGameMappings] = useState<EggGameMappingData[]>([]);
+    const [mappingsLoading, setMappingsLoading] = useState<boolean>(true);
+    const [availableGames, setAvailableGames] = useState<GameOption[]>([]);
+    const [activeTab, setActiveTab] = useState<'server' | 'settings'>('server');
+    const [customDomain, setCustomDomain] = useState<string>('');
+    const [settingsLoading, setSettingsLoading] = useState<boolean>(true);
+
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+    const DEFAULT_API_URL = 'https://api.euphoriadevelopment.uk/gameapi';
+    const [backendApiUrl, setBackendApiUrl] = useState<string>(DEFAULT_API_URL);
+    const serverUuid = uuid;
+
+    // Fetch egg-game mappings from admin settings
+    const fetchEggGameMappings = async () => {
+        try {
+            const response = await fetch('/extensions/playerlisting/admin/egg-game-mappings', {
+                method: 'GET',
+                headers: {
+                    'X-CSRF-TOKEN': csrfToken || '',
+                    'Content-Type': 'application/json',
+                },
+            });
+            
+            if (!response.ok) {
+                throw new Error('Failed to fetch egg-game mappings');
+            }
+            
+            const data = await response.json();
+            setEggGameMappings(data.mappings || []);
+        } catch (err) {
+            console.error('Failed to fetch egg-game mappings:', err);
+        } finally {
+            setMappingsLoading(false);
+        }
+    };
+
+    // Fetch custom API URL from admin settings
+    const fetchApiUrl = async () => {
+        try {
+            const response = await fetch('/extensions/playerlisting/api/playerlisting/api-url', {
+                method: 'GET',
+                headers: {
+                    'X-CSRF-TOKEN': csrfToken || '',
+                    'Content-Type': 'application/json',
+                },
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                const customApiUrl = data.api_url;
+                if (customApiUrl && customApiUrl.trim() !== '') {
+                    setBackendApiUrl(customApiUrl.trim());
+                    console.log('Using custom API URL:', customApiUrl.trim());
+                } else {
+                    setBackendApiUrl(DEFAULT_API_URL);
+                    console.log('Using default API URL:', DEFAULT_API_URL);
+                }
+            } else {
+                console.warn('Failed to fetch custom API URL, using default');
+                setBackendApiUrl(DEFAULT_API_URL);
+            }
+        } catch (err) {
+            console.error('Failed to fetch API URL:', err);
+            setBackendApiUrl(DEFAULT_API_URL);
+        }
+    };
+
+    // Load user settings for this server
+    const loadUserSettings = async () => {
+        if (!serverUuid) return;
+        
+        try {
+            const response = await fetch(`/extensions/playerlisting/api/user-settings?user_uuid=current_user&server_uuid=${serverUuid}`, {
+                method: 'GET',
+                headers: {
+                    'X-CSRF-TOKEN': csrfToken || '',
+                    'Content-Type': 'application/json',
+                }
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                const settings = data.settings || {};
+                
+                if (settings.custom_domain) {
+                    setCustomDomain(settings.custom_domain);
+                }
+                if (settings.custom_port) {
+                    setCustomPort(settings.custom_port);
+                }
+                if (settings.selected_game) {
+                    setSelectedGame(settings.selected_game);
+                }
+                
+                console.log('Loaded user settings:', settings);
+            }
+        } catch (err) {
+            console.error('Failed to load user settings:', err);
+        } finally {
+            setSettingsLoading(false);
+        }
+    };
+
+    // Save user settings for this server
+    const saveUserSettings = async () => {
+        if (!serverUuid) return;
+        
+        try {
+            const response = await fetch('/extensions/playerlisting/api/user-settings', {
+                method: 'POST',
+                headers: {
+                    'X-CSRF-TOKEN': csrfToken || '',
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    user_uuid: 'current_user', // This should be replaced with actual user UUID
+                    server_uuid: serverUuid,
+                    custom_domain: customDomain,
+                    custom_port: customPort,
+                    selected_game: selectedGame
+                })
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                if (data.success) {
+                    console.log('User settings saved successfully');
+                    // Update IP if custom domain is set
+                    if (customDomain) {
+                        setIp(customDomain);
+                    }
+                    // Update port if custom port is set
+                    if (customPort) {
+                        setPort(parseInt(customPort, 10));
+                    }
+                } else {
+                    console.error('Failed to save user settings:', data.error);
+                }
+            }
+        } catch (err) {
+            console.error('Failed to save user settings:', err);
+        }
+    };
+
+    // Filter available games based on server's egg ID
+    const fetchAvailableGames = async () => {
+        if (!serverUuid || mappingsLoading) return;
+        
+        try {
+            const [server] = await getServer(serverUuid);
+            console.log('Server object:', server); // Debug log
+            
+            // Get egg ID from BlueprintFramework
+            const serverEggId = (server as any).BlueprintFramework?.eggId;
+            console.log('Server egg ID:', serverEggId); // Debug log
+            
+            if (serverEggId) {
+                const availableGames: GameOption[] = [];
+                
+                // Process both string and object formats
+                eggGameMappings.forEach(mapping => {
+                    if (typeof mapping === 'string') {
+                        // Parse string format: "gameName_eggId_displayName_gameId"
+                        const parts = mapping.split('_');
+                        if (parts.length >= 4) {
+                            const mappingEggId = parseInt(parts[1], 10);
+                            if (mappingEggId === serverEggId) {
+                                availableGames.push({
+                                    id: parts[3], // gameId
+                                    name: parts[2] // displayName
+                                });
+                            }
+                        }
+                    } else if (mapping && typeof mapping === 'object') {
+                        // Handle object format
+                        if (mapping.egg_id === serverEggId) {
+                            availableGames.push({
+                                id: mapping.game_id,
+                                name: mapping.game_name
+                            });
+                        }
+                    }
+                });
+                
+                console.log('Available games for egg ID', serverEggId, ':', availableGames); // Debug log
+                setAvailableGames(availableGames);
+                
+                // Auto-select first available game if none selected
+                if (availableGames.length > 0 && !selectedGame) {
+                    setSelectedGame(availableGames[0].id);
+                }
+            } else {
+                console.log('No server egg ID found');
+                setAvailableGames([]);
+            }
+        } catch (err) {
+            console.error('Failed to fetch available games:', err);
+        }
+    };
+
+    // Load mappings, API URL, and user settings on component mount
+    useEffect(() => {
+        fetchEggGameMappings();
+        fetchApiUrl();
+        loadUserSettings();
+    }, []);
+
+    // Update available games when mappings change
+    useEffect(() => {
+        fetchAvailableGames();
+    }, [eggGameMappings, mappingsLoading, serverUuid]);
+
+    useEffect(() => {
+        const fetchServerData = async () => {
+            if (!serverUuid) {
+                setError('Server UUID is not available.');
+                setServerDataLoading(false);
+                return;
+            }
+
+            setServerDataLoading(true);
+            try {
+                const [server] = await getServer(serverUuid);
+                const defaultAllocation = server.allocations.find((allocation) => allocation.isDefault);
+
+                if (!defaultAllocation) {
+                    throw new Error('No default allocation found for the server.');
+                }
+
+                // Use custom domain if set, otherwise use server's IP
+                const serverIp = customDomain || server.sftpDetails.ip;
+                const serverPort = customPort ? parseInt(customPort, 10) : defaultAllocation.port;
+                
+                setIp(serverIp);
+                setPort(serverPort);
+            } catch (error) {
+                console.error('Failed to fetch server details:', error);
+                setError('Failed to fetch server details.');
+            } finally {
+                setServerDataLoading(false);
+            }
+        };
+
+        if (serverUuid) {
+            fetchServerData();
+        }
+    }, [serverUuid, customDomain, customPort]);
+
+    useEffect(() => {
+        const fetchPlayersFromAPI = async () => {
+            if (serverDataLoading || settingsLoading || !ip || !port || !selectedGame) return;
+
+            setLoading(true);
+            setError(null);
+
+            try {
+                const targetURL = `/${selectedGame}/ip=${ip}&port=${port}`;
+                const apiURL = `${backendApiUrl}${targetURL}`;
+                const response = await fetch(apiURL);
+
+                if (response.ok) {
+                    const data = await response.json();
+
+                    if (selectedGame === 'minecraft') {
+                        if (data.success && data.data) {
+                            const gameData = data.data;
+
+                            if (Array.isArray(gameData.players)) {
+                                const updatedPlayers = gameData.players.map((player: any) => ({
+                                    name: player.name,
+                                    uuid: player.raw.id,
+                                    ping: 0,
+                                }));
+
+                                setMaxPlayers(gameData.maxplayers);
+                                setNumPlayers(gameData.numplayers);
+                                setPing(gameData.ping);
+
+                                // Fetch UUID and avatars for each player
+                                for (let i = 0; i < gameData.players.length; i++) {
+                                    try {
+                                        const player = gameData.players[i];
+                                        const uuidResponse = await fetch(`https://playerdb.co/api/player/minecraft/${player.name}`);
+
+                                        if (uuidResponse.ok) {
+                                            const uuidData = await uuidResponse.json();
+                                            const playerUuid = uuidData.data.player.id;
+
+                                            if (playerUuid) {
+                                                updatedPlayers[i].uuid = playerUuid;
+
+                                                const avatarUrl = `https://crafatar.com/avatars/${playerUuid}?overlay=true`;
+                                                setMinecraftAvatars((prevAvatars) => ({
+                                                    ...prevAvatars,
+                                                    [playerUuid]: avatarUrl,
+                                                }));
+                                            }
+                                        }
+                                    } catch {
+                                        continue;
+                                    }
+                                }
+
+                                setPlayers(updatedPlayers);
+                            } else {
+                                setError('No players found on the server.');
+                            }
+                        } else {
+                            setError('Server is offline.');
+                        }
+                    } else if (selectedGame === 'gta5f') {
+                        // For FiveM servers
+                        if (data.success && data.data) {
+                            const gameData = data.data;
+                            setMaxPlayers(gameData.maxplayers);
+                            setNumPlayers(gameData.numplayers);
+                            setPing(gameData.ping);
+
+                            setPlayers(gameData.players.map((player: any) => ({
+                                name: player.name,
+                                uuid: player.raw?.id || 'unknown',
+                                ping: 0,
+                                discord: player.raw?.discord || undefined,
+                                steam: player.raw?.steam || undefined,
+                                identifier: player.raw?.identifier || undefined,
+                            })));
+                        } else {
+                            setError('Server is offline.');
+                        }
+                    } else if (selectedGame === 'beammp') {
+                        // For BeamMP servers
+                        if (data.success && data.data) {
+                            const gameData = data.data;
+                            setMaxPlayers(gameData.maxplayers);
+                            setNumPlayers(gameData.numplayers);
+                            setPing(gameData.ping);
+
+                            // BeamMP returns players as an array of strings (player names)
+                            setPlayers(gameData.players.map((playerName: string, index: number) => ({
+                                name: playerName,
+                                uuid: `N/A`,
+                                ping: "N/A",
+                            })));
+                        } else {
+                            setError('Server is offline.');
+                        }
+                    } else {
+                        // For other games
+                        if (data.success && data.data) {
+                            const gameData = data.data;
+                            setMaxPlayers(gameData.maxplayers);
+                            setNumPlayers(gameData.numplayers);
+                            setPing(gameData.ping);
+
+                            setPlayers(gameData.players.map((player: any) => ({
+                                name: player.name,
+                                uuid: player.raw?.id || 'unknown',
+                                ping: 0,
+                            })));
+                        } else {
+                            setError('Server is offline.');
+                        }
+                    }
+                } else {
+                    throw new Error('Failed to fetch player data.');
+                }
+            } catch (err) {
+                console.error('An error occurred while fetching player data:', err);
+                setError('An error occurred while fetching player data.');
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchPlayersFromAPI();
+    }, [serverDataLoading, settingsLoading, ip, port, selectedGame, backendApiUrl]);
+
+    const handleRefresh = async () => {
+        if (serverDataLoading || settingsLoading || !ip || !port || !selectedGame) return;
+
+        setLoading(true);
+        setError(null);
+
+        try {
+            // Refresh backend configurations first
+            await fetchApiUrl();
+            await fetchEggGameMappings();
+            await fetchAvailableGames();
+
+            // Then fetch fresh player data
+            const targetURL = `/${selectedGame}/ip=${ip}&port=${port}`;
+            const apiURL = `${backendApiUrl}${targetURL}`;
+            const response = await fetch(apiURL);
+
+            if (response.ok) {
+                const data = await response.json();
+
+                if (selectedGame === 'minecraft') {
+                    if (data.success && data.data) {
+                        const gameData = data.data;
+
+                        if (Array.isArray(gameData.players)) {
+                            const updatedPlayers = gameData.players.map((player: any) => ({
+                                name: player.name,
+                                uuid: player.raw.id,
+                                ping: 0,
+                            }));
+
+                            setMaxPlayers(gameData.maxplayers);
+                            setNumPlayers(gameData.numplayers);
+                            setPing(gameData.ping);
+
+                            // Fetch UUID and avatars for each player
+                            for (let i = 0; i < gameData.players.length; i++) {
+                                try {
+                                    const player = gameData.players[i];
+                                    const uuidResponse = await fetch(`https://playerdb.co/api/player/minecraft/${player.name}`);
+
+                                    if (uuidResponse.ok) {
+                                        const uuidData = await uuidResponse.json();
+                                        const playerUuid = uuidData.data.player.id;
+
+                                        if (playerUuid) {
+                                            updatedPlayers[i].uuid = playerUuid;
+
+                                            const avatarUrl = `https://crafatar.com/avatars/${playerUuid}?overlay=true`;
+                                            setMinecraftAvatars((prevAvatars) => ({
+                                                ...prevAvatars,
+                                                [playerUuid]: avatarUrl,
+                                            }));
+                                        }
+                                    }
+                                } catch {
+                                    continue;
+                                }
+                            }
+
+                            setPlayers(updatedPlayers);
+                        } else {
+                            setError('No players found on the server.');
+                        }
+                    } else {
+                        setError('Server is offline.');
+                    }
+                    } else if (selectedGame === 'gta5f') {
+                        // For FiveM servers
+                        if (data.success && data.data) {
+                            const gameData = data.data;
+                            setMaxPlayers(gameData.maxplayers);
+                            setNumPlayers(gameData.numplayers);
+                            setPing(gameData.ping);
+
+                            setPlayers(gameData.players.map((player: any) => ({
+                                name: player.name,
+                                uuid: player.raw?.id || 'unknown',
+                                ping: 0,
+                                discord: player.raw?.discord || undefined,
+                                steam: player.raw?.steam || undefined,
+                                identifier: player.raw?.identifier || undefined,
+                            })));
+                        } else {
+                            setError('Server is offline.');
+                        }
+                    } else if (selectedGame === 'beammp') {
+                        // For BeamMP servers
+                        if (data.success && data.data) {
+                            const gameData = data.data;
+                            setMaxPlayers(gameData.maxplayers);
+                            setNumPlayers(gameData.numplayers);
+                            setPing(gameData.ping);
+
+                            // BeamMP returns players as an array of strings (player names)
+                            setPlayers(gameData.players.map((playerName: string, index: number) => ({
+                                name: playerName,
+                                uuid: "N/A",
+                                ping: "N/A",
+                            })));
+                        } else {
+                            setError('Server is offline.');
+                        }
+                    } else {
+                        // For other games
+                        if (data.success && data.data) {
+                            const gameData = data.data;
+                            setMaxPlayers(gameData.maxplayers);
+                            setNumPlayers(gameData.numplayers);
+                            setPing(gameData.ping);
+
+                            setPlayers(gameData.players.map((player: any) => ({
+                                name: player.name,
+                                uuid: player.raw?.id || 'unknown',
+                                ping: 0,
+                            })));
+                        } else {
+                            setError('Server is offline.');
+                        }
+                    }
+            } else {
+                throw new Error('Failed to fetch player data.');
+            }
+        } catch (err) {
+            console.error('An error occurred while refreshing player data:', err);
+            setError('An error occurred while refreshing player data.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleGameChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+        const gameId = e.target.value;
+        setSelectedGame(gameId);
+    };
+
+    const pingColor = useMemo(() => {
+        if (ping === null) return 'transparent';
+        if (ping < 50) return 'bg-green-500';
+        if (ping < 100) return 'bg-orange-500';
+        return 'bg-red-500';
+    }, [ping]);
+
+    const handleCopy = (identifier: string, label: string) => {
+        const cleanedIdentifier = identifier.includes(":") ? identifier.split(":")[1] : identifier;
+        
+        navigator.clipboard.writeText(cleanedIdentifier)
+            .then(() => {
+                setCopiedUUIDs(prev => ({ ...prev, [label]: true }));
+                setTimeout(() => setCopiedUUIDs(prev => ({ ...prev, [label]: false })), 2000);
+            })
+            .catch((err) => console.error("Failed to copy identifier:", err));
+    };
 
     const handleManageClick = (player: Player) => {
         setSelectedPlayer(player);
@@ -119,7 +599,7 @@ const fetchPlayers: React.FC = () => {
     const handleCloseModal = () => {
         setModalOpen(false);
         setSelectedPlayer(null);
-        setKickBanReason(''); // Clear reason on close
+        setKickBanReason('');
     };
 
     const handleBansClick = () => {
@@ -136,260 +616,11 @@ const fetchPlayers: React.FC = () => {
     };
 
     const closeInfoModal = () => setShowInfoModal(false);
-    
-    const BACKEND_API_URL = (window as any).SiteConfiguration.api_url || 'https://api.euphoriatheme.uk/api';
-  
-    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
-    const serverUuid = uuid;
-
-    useEffect(() => {
-        const fetchData = async () => {
-            await fetchServerData();
-        };
-    
-        if (serverUuid) {
-            const savedGame = localStorage.getItem(`${serverUuid}_selectedGame`);
-            if (savedGame) setSelectedGame(savedGame);
-            const savedPort = localStorage.getItem(`${serverUuid}_customPort`);
-            if (savedPort) setCustomPort(savedPort);
-            fetchData();
-        } else {
-            console.log('Server UUID is not available.');
-        }
-    }, [serverUuid]);
-    
-    useEffect(() => {
-        const fetchPlayers = async () => {
-            if (!serverDataLoading && ip && port && selectedGame) {
-                await fetchPlayersFromAPI();
-            }
-        };
-    
-        fetchPlayers();
-    }, [serverDataLoading, ip, port, selectedGame]);
-
-    const fetchServerData = async () => {
-        if (!serverUuid) {
-            throw new Error('Server UUID is not available.');
-        }
-
-        setServerDataLoading(true);
-        try {
-            const [server] = await getServer(serverUuid);
-            const defaultAllocation = server.allocations.find(allocation => allocation.isDefault);
-            setIp(server.sftpDetails.ip);
-            setPort(defaultAllocation?.port || server.allocations[0].port || 0);
-        } catch (error) {
-            console.error('Failed to fetch server details:', error);
-            setError('Failed to fetch server details.');
-        } finally {
-            setServerDataLoading(false);
-        }
-    };
-
-    const handleRefresh = async () => {
-        await fetchServerData();
-        if (!serverDataLoading && ip && port && selectedGame) {
-            fetchPlayersFromAPI();
-        }
-    };
-
-    const fetchPlayersFromAPI = async () => {
-        if (serverDataLoading || !ip || !port || !selectedGame) {
-            console.log('Skipping fetchPlayersFromAPI due to incomplete data:', { serverDataLoading, ip, port, selectedGame });
-            return; // Ensure fetchServerData completes and data is valid
-        }
-    
-        setLoading(true);
-        setError(null);
-    
-        try {
-            const queryPort = customPort ? Number(customPort) : port;
-    
-            // Step 2: Construct the API URL
-            const targetURL = `/${selectedGame}/ip=${ip}&port=${queryPort}`;
-            const apiURL = `${BACKEND_API_URL}${targetURL}`;
-
-    
-            // Step 3: Make the API call with the forwarded data
-            const response = await fetch(apiURL, {
-                method: 'GET', // Use GET since we're sending data as query parameters
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-            });
-    
-            if (response.ok) {
-                const data = await response.json();
-                console.log('API response:', data); // Log the API response for debugging
-    
-                if (selectedGame === 'minecraft') {
-                    if (data.success && data.data) {
-                        const gameData = data.data;
-    
-                        if (Array.isArray(gameData.players)) {
-                            const updatedPlayers: Player[] = gameData.players.map((player: any) => ({
-                                name: player.name,
-                                uuid: '', // Will fetch separately if needed
-                                ping: 0,
-                            }));
-    
-                            setMaxPlayers(gameData.maxplayers);
-                            setNumPlayers(gameData.numplayers);
-                            setPing(gameData.ping);
-    
-                            // Fetch UUID and avatars for each player
-                            for (let i = 0; i < gameData.players.length; i++) {
-                                const playerName = gameData.players[i].name;
-                                try {
-                                    const uuidResponse = await fetch(`https://playerdb.co/api/player/minecraft/${playerName}`);
-                                    if (uuidResponse.ok) {
-                                        const uuidData = await uuidResponse.json();
-                                        const playerUuid = uuidData?.data?.player?.id;
-    
-                                        if (playerUuid) {
-                                            updatedPlayers[i].uuid = playerUuid;
-    
-                                            const avatarUrl = `https://crafatar.com/avatars/${playerUuid}?overlay=true`;
-                                            setMinecraftAvatars((prevAvatars) => ({
-                                                ...prevAvatars,
-                                                [playerUuid]: avatarUrl,
-                                            }));
-                                        }
-                                    }
-                                } catch {
-                                    continue;
-                                }
-                            }
-    
-                            setPlayers(updatedPlayers);
-                        } else {
-                            setError('No players found on the server.');
-                        }
-                    } else {
-                        setError('Server is offline.');
-                    }
-                } else if (selectedGame === 'gta5f') {
-                    if (data.success && data.data) {
-                        const fivemData = data.data;
-                        const players = fivemData.players.map((player: any) => {
-                            return {
-                                name: player.name,
-                                uuid: player.uuid || 'unknown',
-                                discord: player.discord,
-                                steam: player.steam,
-                                identifier: player.identifier,
-                                ping: player.ping,
-                            };
-                        });                        
-    
-                        setPlayers(players);
-                        setMaxPlayers(parseInt(fivemData.maxPlayers, 10));
-                        setNumPlayers(parseInt(fivemData.numPlayers, 10));
-                        setPing(data.ping || 0);
-                    } else {
-                        setError('Server is offline.');
-                    }
-                } else if (selectedGame === 'rust') {
-                    if (data.success && data.data) {
-                        const rustData = data.data;
-                        setPlayers(rustData.players);
-                        setMaxPlayers(rustData.maxplayers);
-                        setNumPlayers(rustData.numplayers);
-                        setPing(rustData.ping);                    
-                    } else {
-                        setError('Server is offline.');
-                    }
-                } else if (selectedGame === 'beammp') {
-                    if (data.success && data.data) {
-                        const beammpData = data.data;
-    
-                        // Assuming BeamMP returns a list of players and server info
-                        setPlayers(beammpData.players.map((player: any) => ({
-                            name: player.name,
-                            uuid: player.uuid || 'unknown',
-                            ping: player.ping || 0,
-                        })));
-                        setMaxPlayers(beammpData.maxplayers);
-                        setNumPlayers(beammpData.players);
-                        setPing(beammpData.ping);
-                    } else {
-                        setError('Server is offline.');
-                    }
-                } else {
-                    // For other games
-                    if (data.success && data.data) {
-                        const gameData = data.data;
-                        setMaxPlayers(gameData.maxplayers);
-                        setNumPlayers(gameData.numplayers);
-                        setPing(gameData.ping);
-    
-                        setPlayers(gameData.players.map((player: any) => ({
-                            name: player.name,
-                            uuid: player.raw.id,
-                            ping: 0,
-                        })));
-                    } else {
-                        setError('Server is offline.');
-                    }
-                }
-            } else {
-                throw new Error('Failed to fetch player data.');
-            }
-        } catch (err) {
-            console.error('An error occurred while fetching player data:', err);
-            setError('An error occurred while fetching player data.');
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const saveCustomPort = () => {
-        if (serverUuid) {
-            localStorage.setItem(`${serverUuid}_customPort`, customPort || ''); // Use an empty string as fallback
-            setPort(Number(customPort) || port); // Update the port state
-        }
-    };
-    
-    const resetCustomPort = () => {
-        if (serverUuid) {
-            localStorage.removeItem(`${serverUuid}_customPort`); // Remove from localStorage
-        }
-        setCustomPort(''); // Reset the custom port state
-    };
-
-    const handleGameChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-        const gameId = e.target.value;
-        setSelectedGame(gameId);
-        if (serverUuid) {
-            localStorage.setItem(`${serverUuid}_selectedGame`, gameId);
-        }
-    };
-
-    const pingColor = useMemo(() => {
-        if (ping === null) return 'transparent';
-        if (ping < 50) return 'bg-green-500'; // Good ping
-        if (ping < 100) return 'bg-orange-500'; // Moderate ping
-        return 'bg-red-500'; // High ping
-    }, [ping]);
-
-    const handleCopy = (identifier: string, label: string) => {
-        // Remove any prefix before ":" if it exists
-        const cleanedIdentifier = identifier.includes(":") ? identifier.split(":")[1] : identifier;
-    
-        navigator.clipboard.writeText(cleanedIdentifier)
-            .then(() => {
-                setCopiedUUIDs(prev => ({ ...prev, [label]: true }));
-                setTimeout(() => setCopiedUUIDs(prev => ({ ...prev, [label]: false })), 2000);
-            })
-            .catch((err) => console.error("Failed to copy identifier:", err));
-    };   
 
     const handleUnbanPlayer = async (playerName: string) => {
         try {
             const serverId = uuid;
-            const command = `pardon ${playerName}`;  // Minecraft unban command
-
+            const command = `pardon ${playerName}`;
             const baseUrl = `${window.location.protocol}//${window.location.host}`;
             const response = await fetch(`${baseUrl}/api/client/servers/${serverId}/command`, {
                 method: 'POST',
@@ -411,13 +642,12 @@ const fetchPlayers: React.FC = () => {
             console.error(`An error occurred while trying to unban ${playerName}:`, error);
         }
     };
-    
+
     const handleBanPlayer = async (playerName: string) => {
         try {
             const serverId = uuid;
-            const command = `ban ${playerName} ${kickBanReason}`; // Include reason in command
+            const command = `ban ${playerName} ${kickBanReason}`;
             const baseUrl = `${window.location.protocol}//${window.location.host}`;
-
             const response = await fetch(`${baseUrl}/api/client/servers/${serverId}/command`, {
                 method: 'POST',
                 headers: {
@@ -436,16 +666,13 @@ const fetchPlayers: React.FC = () => {
         } catch (error) {
             console.error(`An error occurred while trying to ban ${playerName}:`, error);
         }
-    };  
+    };
 
     const handleOpPlayer = async (playerName: string) => {
         try {
-            const serverId = uuid; // Use the server UUID from context or props
-            const command = `op ${playerName}`; // Command to ban the player
-            
-            // Dynamically fetch the current domain
+            const serverId = uuid;
+            const command = `op ${playerName}`;
             const baseUrl = `${window.location.protocol}//${window.location.host}`;
-    
             const response = await fetch(`${baseUrl}/api/client/servers/${serverId}/command`, {
                 method: 'POST',
                 headers: {
@@ -455,25 +682,22 @@ const fetchPlayers: React.FC = () => {
                 },
                 body: JSON.stringify({ command })
             });
-    
+
             if (response.ok) {
-                console.log(`${playerName} has been Give OP.`);
+                console.log(`${playerName} has been given OP.`);
             } else {
                 console.error(`Failed to give OP to ${playerName}:`, response.statusText);
             }
         } catch (error) {
             console.error(`An error occurred while trying to OP ${playerName}:`, error);
         }
-    };  
+    };
 
     const handleUnOpPlayer = async (playerName: string) => {
         try {
-            const serverId = uuid; // Use the server UUID from context or props
-            const command = `deop ${playerName}`; // Command to ban the player
-            
-            // Dynamically fetch the current domain
+            const serverId = uuid;
+            const command = `deop ${playerName}`;
             const baseUrl = `${window.location.protocol}//${window.location.host}`;
-    
             const response = await fetch(`${baseUrl}/api/client/servers/${serverId}/command`, {
                 method: 'POST',
                 headers: {
@@ -483,16 +707,16 @@ const fetchPlayers: React.FC = () => {
                 },
                 body: JSON.stringify({ command })
             });
-    
+
             if (response.ok) {
-                console.log(`${playerName} has been Removed from OP.`);
+                console.log(`${playerName} has been removed from OP.`);
             } else {
                 console.error(`Failed to remove OP from ${playerName}:`, response.statusText);
             }
         } catch (error) {
             console.error(`An error occurred while trying to DEOP ${playerName}:`, error);
         }
-    };  
+    };
 
     const fetchBannedPlayers = async () => {
         try {
@@ -500,7 +724,7 @@ const fetchPlayers: React.FC = () => {
             if (response.ok) {
                 const data = await response.json();
                 const bannedData = Array.isArray(data) ? data : [];
-    
+
                 const playersWithAvatars = await Promise.all(
                     bannedData.map(async (player: { uuid: string; name: string; created: string; source: string; expires: string; reason: string }) => {
                         const avatarUrl = `https://crafatar.com/avatars/${player.uuid}?overlay=true`;
@@ -515,7 +739,7 @@ const fetchPlayers: React.FC = () => {
                         };
                     })
                 );
-    
+
                 setBannedPlayers(playersWithAvatars);
                 setShowBannedModal(true);
             } else {
@@ -529,9 +753,8 @@ const fetchPlayers: React.FC = () => {
     const handleKickPlayer = async (playerName: string) => {
         try {
             const serverId = uuid;
-            const command = `kick ${playerName} ${kickBanReason}`; // Include reason in command
+            const command = `kick ${playerName} ${kickBanReason}`;
             const baseUrl = `${window.location.protocol}//${window.location.host}`;
-
             const response = await fetch(`${baseUrl}/api/client/servers/${serverId}/command`, {
                 method: 'POST',
                 headers: {
@@ -553,252 +776,347 @@ const fetchPlayers: React.FC = () => {
     };
 
     return (
-    <ServerContentBlock title={'Logs'}>
-        <div className="minecraft-players-container bg-gray-900 p-6 rounded-lg relative">
-        <div className="flex justify-between items-center mb-4">
-            <h3 className="font-header leading-tight text-md md:text-sm text-gray-200">
-                Connected Players {numPlayers}/{maxPlayers}
-            </h3>
-            <div className="flex items-center space-x-2">
-                <div className="flex items-center">
-                    <div className={`${pingColor} w-4 h-4 rounded-full mr-2`}></div>
-                    <span className="text-gray-200">{ping !== null ? `${ping} ms` : 'N/A'}</span>
+        <ServerContentBlock title={'Player Management'}>
+            <div className="minecraft-players-container bg-gray-900 p-6 rounded-lg relative">
+                {/* Tab Navigation */}
+                <div className="flex border-b border-gray-700 pb-4 mb-4">
+                    <button
+                        onClick={() => setActiveTab('server')}
+                        className={`px-4 py-2 font-medium text-sm ${
+                            activeTab === 'server' 
+                                ? 'border-b-2 border-blue-500 text-blue-400' 
+                                : 'text-gray-400 hover:text-gray-200'
+                        }`}
+                    >
+                        Server
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('settings')}
+                        className={`px-4 py-2 ml-2 font-medium text-sm ${
+                            activeTab === 'settings' 
+                                ? 'border-b-2 border-blue-500 text-blue-400' 
+                                : 'text-gray-400 hover:text-gray-200'
+                        }`}
+                    >
+                        Settings
+                    </button>
                 </div>
-                <button
-                    onClick={handleRefresh}
-                    className="text-white hover:text-white focus:outline-none"
-                    aria-label="Refresh server data"
-                >
-                    <i className="fa-solid fa-arrows-rotate"></i>
-                </button>
-            </div>
-        </div>
 
-            {/* Select Game Dropdown */}
-            <div className="mt-4">
-        <label htmlFor="game-select" className="block text-sm text-gray-200 mb-2">Select Game</label>
-        <select
-            id="game-select"
-            value={selectedGame || ''}
-            onChange={handleGameChange} // Ensure this is correctly linked
-            className="w-full p-2 rounded bg-gray-900 text-white"
-        >
-            <option value="">Choose a game</option>
-            {gameOptions.map(game => (
-                <option key={game.id} value={game.id}>{game.name}</option>
-            ))}
-            </select>
-        </div>
+                {/* Server Tab */}
+                {activeTab === 'server' && (
+                    <div>
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="font-header leading-tight text-md md:text-sm text-gray-200">
+                                Connected Players {numPlayers}/{maxPlayers}
+                            </h3>
+                            <div className="flex items-center space-x-2">
+                                <div className="flex items-center">
+                                    <div className={`${pingColor} w-4 h-4 rounded-full mr-2`}></div>
+                                    <span className="text-gray-200">{ping !== null ? `${ping} ms` : 'N/A'}</span>
+                                </div>
+                                <button
+                                    onClick={handleRefresh}
+                                    className="text-white hover:text-white focus:outline-none"
+                                    aria-label="Refresh server data"
+                                >
+                                    <i className="fa-solid fa-arrows-rotate"></i>
+                                </button>
+                            </div>
+                        </div>
 
-            {/* Custom Port Input */}
-            <div className="custom-port-form mt-4 mb-4">
-                <label htmlFor="custom-port" className="block text-sm text-gray-200 mb-2">Custom Query Port</label>
-                <input
-                    id="custom-port"
-                    value={customPort || ''}
-                    onChange={(e) => setCustomPort(e.target.value)}  
-                    placeholder={String(port)}
-                    className="w-full p-2 rounded bg-gray-900 text-white"
-                />
-                <div className="mt-2 flex justify-between">
-                    <button onClick={saveCustomPort} className="bg-gray-900 text-white px-4 py-2 rounded">Save Port</button>
-                    <button onClick={resetCustomPort} className="bg-gray-900 text-white px-4 py-2 rounded">Reset to Default</button>
-                </div>
-            </div>
+                        {loading && <p className="text-gray-400">Loading players...</p>}
+                        {error && <p className="text-red-500">{error}</p>}
+                        {!selectedGame && !loading && !error && (
+                            <p className="text-gray-400">Please configure a game in the Settings tab.</p>
+                        )}
+                        {players.length > 0 && !loading && !error && (
+                            <ul className="players-list space-y-4">
+                                {players.map(player => (
+                                    <li key={player.uuid} className="bg-gray-800 p-4 rounded-lg">
+                                        <div className="flex items-center justify-between space-x-2">
+                                            <div className="flex items-center space-x-4">
+                                                {selectedGame === 'minecraft' && minecraftAvatars[player.uuid] ? (
+                                                    <img
+                                                        src={minecraftAvatars[player.uuid] || ''}
+                                                        alt={`${player.name}'s avatar`}
+                                                        className="w-8 h-8 rounded-full"
+                                                    />
+                                                ) : null}
+                                                <span className="text-white">{player.name}</span>
+                                                <span className="text-gray-300 text-sm">{player.ping} ms</span>
+                                            </div>
+                                            <div className="flex space-x-2">
+                                                <button
+                                                    onClick={() => handleCopy(player.uuid, player.name)}
+                                                    className="text-sm bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600"
+                                                >
+                                                    {copiedUUIDs[player.name] ? "Copied!" : "UUID"}
+                                                </button>
+                                                {selectedGame === 'gta5f' && player.discord && (
+                                                    <button
+                                                        onClick={() => handleCopy(player.discord!, `${player.name}_discord`)}
+                                                        className="text-sm bg-purple-500 text-white px-2 py-1 rounded hover:bg-purple-600"
+                                                    >
+                                                        {copiedUUIDs[`${player.name}_discord`] ? "Copied!" : "Discord"}
+                                                    </button>
+                                                )}
+                                                {selectedGame === 'gta5f' && player.steam && (
+                                                    <button
+                                                        onClick={() => handleCopy(player.steam!, `${player.name}_steam`)}
+                                                        className="text-sm bg-green-500 text-white px-2 py-1 rounded hover:bg-green-600"
+                                                    >
+                                                        {copiedUUIDs[`${player.name}_steam`] ? "Copied!" : "Steam"}
+                                                    </button>
+                                                )}
+                                                {selectedGame === 'gta5f' && player.identifier && (
+                                                    <button
+                                                        onClick={() => handleCopy(player.identifier!, `${player.name}_identifier`)}
+                                                        className="text-sm bg-orange-500 text-white px-2 py-1 rounded hover:bg-orange-600"
+                                                    >
+                                                        {copiedUUIDs[`${player.name}_identifier`] ? "Copied!" : "ID"}
+                                                    </button>
+                                                )}
+                                                {selectedGame === 'minecraft' ? (
+                                                    <button
+                                                        onClick={() => handleManageClick(player)}
+                                                        className="text-sm bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600"
+                                                    >
+                                                        Manage
+                                                    </button>
+                                                ) : null}
+                                            </div>
+                                        </div>
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
 
-            {loading && <p>Loading players...</p>}
-            {error && <p className="text-red-500">{error}</p>}
-            {players.length > 0 && !loading && !error && (
-            <ul className="players-list space-y-4">
-            {players.map(player => (
-            <li key={player.uuid} className="bg-gray-900 p-4 rounded-lg">
-                <div className="flex items-center justify-between space-x-2">
-                    <div className="flex items-center space-x-4">
-                    {selectedGame === 'minecraft' && minecraftAvatars[player.uuid] ? (
-                                        <img
-                                            src={minecraftAvatars[player.uuid] || ''}
-                                            alt={`${player.name}'s avatar`}
-                                            className="w-8 h-8 rounded-full"
-                                        />
-                    ) : null}
-                        <span className="text-white">{player.name}</span>
-                        <span className="text-gray-300 text-sm">{player.ping} ms</span>
-                    </div>
-                    <div className="flex space-x-2">
-                        {selectedGame === 'gta5f' ? (
-                            <>
-                                {player.uuid && (
-                                    <button
-                                        onClick={() => handleCopy(player.uuid, `${player.name}-fivem`)}
-                                        className="text-sm bg-blue-500 text-white px-2 py-1 rounded"
-                                    >
-                                        {copiedUUIDs[`${player.name}-fivem`] ? "Copied!" : "Copy FiveM UUID"}
-                                    </button>
-                                )}
-                                {player.discord && (
-                                    <button
-                                        onClick={() => handleCopy(player.discord!, `${player.name}-discord`)}
-                                        className="text-sm bg-blue-500 text-white px-2 py-1 rounded"
-                                    >
-                                        {copiedUUIDs[`${player.name}-discord`] ? "Copied!" : "Copy Discord ID"}
-                                    </button>
-                                )}
-                                {player.steam && (
-                                    <button
-                                        onClick={() => handleCopy(player.steam!, `${player.name}-steam`)}
-                                        className="text-sm bg-blue-500 text-white px-2 py-1 rounded"
-                                    >
-                                        {copiedUUIDs[`${player.name}-steam`] ? "Copied!" : "Copy Steam ID"}
-                                    </button>
-                                )}
-                            </>
-                        ) : (
+                        {selectedGame === 'minecraft' && (
                             <button
-                                onClick={() => handleCopy(player.uuid, player.name)}
-                                className="text-sm bg-blue-500 text-white px-2 py-1 rounded"
+                                onClick={() => handleBansClick()}
+                                className="text-sm bg-blue-500 text-white px-3 py-1 rounded mt-4 hover:bg-blue-600"
                             >
-                                {copiedUUIDs[player.name] ? "Copied!" : "UUID"}
+                                View Banned Players
                             </button>
                         )}
-                        {selectedGame === 'minecraft' ? (
-                                <button
-                                onClick={() => handleManageClick(player)}
-                                className="text-sm bg-blue-500 text-white px-3 py-1 rounded"
-                            >
-                                Manage
-                            </button>
-                        ) : null}
                     </div>
-                </div>
-            </li>
-        ))}
-    </ul>
-)}
-            {selectedGame === 'minecraft' ? (
-                <button
-                onClick={() => handleBansClick()}
-                className="text-sm bg-blue-500 text-white px-3 py-1 rounded mt-4"
-                >
-                    View Banned Players
-                </button>
-            ) : null}
+                )}
 
-            {/* Modal for Player Actions */}
-            {modalOpen && selectedPlayer && ReactDOM.createPortal(
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-                    <div className="bg-gray-900 rounded-lg p-6 relative shadow-lg" style={{ width: '50rem', maxWidth: '90%' }}>
-                        <button
-                            onClick={handleCloseModal}
-                            className="absolute top-2 right-2 text-gray-500 hover:text-gray-700"
-                        >
-                            ×
-                        </button>
-                        <h2 className="text-lg text-white font-semibold mb-4">Manage {selectedPlayer.name}</h2>
+                {/* Settings Tab */}
+                {activeTab === 'settings' && (
+                    <div className="space-y-4">
+                        <h3 className="text-lg font-semibold text-gray-200 mb-4">Server Configuration</h3>
                         
-                        {/* Player's 3D Model */}
-                        {selectedPlayer.uuid && (
-                            <div className="flex justify-center mb-4">
-                                <img
-                                    src={`https://crafatar.com/renders/body/${selectedPlayer.uuid}?overlay=true`}
-                                    alt={`${selectedPlayer.name}'s 3D model`}
-                                    className="w-32"
-                                />
+                        {settingsLoading ? (
+                            <p className="text-gray-400">Loading settings...</p>
+                        ) : (
+                            <div className="space-y-4">
+                                {/* IP/Domain Field */}
+                                <div>
+                                    <label htmlFor="custom-domain" className="block text-sm text-gray-200 mb-2">
+                                        Custom IP/Domain
+                                    </label>
+                                    <input
+                                        id="custom-domain"
+                                        type="text"
+                                        value={customDomain}
+                                        onChange={(e) => setCustomDomain(e.target.value)}
+                                        placeholder="Leave empty to use server's default IP"
+                                        className="w-full p-2 rounded bg-gray-800 text-white border border-gray-600 focus:border-blue-500 focus:outline-none"
+                                    />
+                                    <p className="text-xs text-gray-400 mt-1">
+                                        Current IP: {ip || 'Not set'}
+                                    </p>
+                                </div>
+
+                                {/* Port Field */}
+                                <div>
+                                    <label htmlFor="custom-port" className="block text-sm text-gray-200 mb-2">
+                                        Custom Query Port
+                                    </label>
+                                    <input
+                                        id="custom-port"
+                                        type="number"
+                                        value={customPort || ''}
+                                        onChange={(e) => setCustomPort(e.target.value)}
+                                        placeholder="Leave empty to use server's default port"
+                                        className="w-full p-2 rounded bg-gray-800 text-white border border-gray-600 focus:border-blue-500 focus:outline-none"
+                                    />
+                                    <p className="text-xs text-gray-400 mt-1">
+                                        Current Port: {port || 'Not set'}
+                                    </p>
+                                </div>
+
+                                {/* Game Selection */}
+                                <div>
+                                    <label htmlFor="game-select" className="block text-sm text-gray-200 mb-2">
+                                        Select Game
+                                    </label>
+                                    <select
+                                        id="game-select"
+                                        value={selectedGame || ''}
+                                        onChange={handleGameChange}
+                                        className="w-full p-2 rounded bg-gray-800 text-white border border-gray-600 focus:border-blue-500 focus:outline-none"
+                                        disabled={mappingsLoading}
+                                    >
+                                        <option value="">
+                                            {mappingsLoading ? 'Loading games...' : 'Choose a game'}
+                                        </option>
+                                        {availableGames.map(game => (
+                                            <option key={game.id} value={game.id}>{game.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                {/* Save Button */}
+                                <div className="flex space-x-2">
+                                    <button
+                                        onClick={saveUserSettings}
+                                        className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 focus:outline-none"
+                                    >
+                                        Save Settings
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            setCustomDomain('');
+                                            setCustomPort('');
+                                            setSelectedGame('');
+                                            saveUserSettings();
+                                        }}
+                                        className="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700 focus:outline-none"
+                                    >
+                                        Reset to Default
+                                    </button>
+                                </div>
                             </div>
                         )}
+                    </div>
+                )}
 
-                        {/* Reason Input */}
-                        <label className="text-white">Reason for Kick/Ban:</label>
-                        <input
-                            type="text"
-                            value={kickBanReason}
-                            onChange={(e) => setKickBanReason(e.target.value)}
-                            placeholder="Enter reason"
-                            className="w-full p-2 mt-2 mb-4 rounded bg-gray-700 text-white"
-                        />
+                {/* Modals remain the same */}
+                {/* Modal for Player Actions */}
+                {modalOpen && selectedPlayer && ReactDOM.createPortal(
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+                        <div className="bg-gray-900 rounded-lg p-6 relative shadow-lg" style={{ width: '50rem', maxWidth: '90%' }}>
+                            <button
+                                onClick={handleCloseModal}
+                                className="absolute top-2 right-2 text-gray-500 hover:text-gray-700"
+                            >
+                                ×
+                            </button>
+                            <h2 className="text-lg text-white font-semibold mb-4">Manage {selectedPlayer.name}</h2>
+                            
+                            {/* Player's 3D Model */}
+                            {selectedPlayer.uuid && (
+                                <div className="flex justify-center mb-4">
+                                    <img
+                                        src={`https://crafatar.com/renders/body/${selectedPlayer.uuid}?overlay=true`}
+                                        alt={`${selectedPlayer.name}'s 3D model`}
+                                        className="w-32"
+                                    />
+                                </div>
+                            )}
 
-                        {/* Action Buttons */}
-                        <div className="space-y-2">
-                            <button
-                                onClick={() => handleBanPlayer(selectedPlayer.name)}
-                                className="w-full px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
-                            >
-                                Ban
-                            </button>
-                            <button
-                                onClick={() => handleKickPlayer(selectedPlayer.name)}
-                                className="w-full px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
-                            >
-                                Kick
-                            </button>
-                            <button
-                                onClick={() => handleOpPlayer(selectedPlayer.name)}
-                                className="w-full px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
-                            >
-                                Give OP
-                            </button>
-                            <button
-                                onClick={() => handleUnOpPlayer(selectedPlayer.name)}
-                                className="w-full px-4 py-2 bg-yellow-500 text-white rounded hover:bg-yellow-600"
-                            >
-                                Remove OP
-                            </button>
+                            {/* Reason Input */}
+                            <label className="text-white">Reason for Kick/Ban:</label>
+                            <input
+                                type="text"
+                                value={kickBanReason}
+                                onChange={(e) => setKickBanReason(e.target.value)}
+                                placeholder="Enter reason"
+                                className="w-full p-2 mt-2 mb-4 rounded bg-gray-700 text-white"
+                            />
+
+                            {/* Action Buttons */}
+                            <div className="space-y-2">
+                                <button
+                                    onClick={() => handleBanPlayer(selectedPlayer.name)}
+                                    className="w-full px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
+                                >
+                                    Ban
+                                </button>
+                                <button
+                                    onClick={() => handleKickPlayer(selectedPlayer.name)}
+                                    className="w-full px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
+                                >
+                                    Kick
+                                </button>
+                                <button
+                                    onClick={() => handleOpPlayer(selectedPlayer.name)}
+                                    className="w-full px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
+                                >
+                                    Give OP
+                                </button>
+                                <button
+                                    onClick={() => handleUnOpPlayer(selectedPlayer.name)}
+                                    className="w-full px-4 py-2 bg-yellow-500 text-white rounded hover:bg-yellow-600"
+                                >
+                                    Remove OP
+                                </button>
+                            </div>
                         </div>
-                    </div>
-                </div>,
-                document.body
-            )}
-            {showBannedModal && ReactDOM.createPortal(
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-                    <div className="bg-gray-900 rounded-lg p-6 relative shadow-lg" style={{ width: '50rem', maxWidth: '90%' }}>
-                        <button onClick={closeBannedModal} className="absolute top-2 right-2 text-gray-500 hover:text-gray-700">×</button>
-                        <h2 className="text-lg font-semibold mb-4 text-white">Banned Players</h2>
-                        <ul>
-                            {bannedPlayers.map((player) => (
-                                <li key={player.uuid} className="flex items-center justify-between mb-2">
-                                    <div className="flex items-center">
-                                        {player.avatarUrl && (
-                                            <img src={player.avatarUrl} alt={player.name} className="w-8 h-8 rounded-full mr-2" />
-                                        )}
-                                        <span className="text-white">{player.name}</span>
-                                    </div>
-                                    <button
-                                        onClick={() => handleUnbanPlayer(player.name)}
-                                        className="text-sm bg-red-500 text-white px-2 py-1 rounded hover:bg-red-600"
-                                    >
-                                        Unban
-                                    </button>
-                                    <button
-                                            onClick={() => openInfoModal(player)}
-                                            className="text-sm bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600"
-                                        >
-                                            Reason
-                                        </button>
-                                </li>
-                            ))}
-                        </ul>
-                    </div>
-                </div>,
-                document.body
-            )}
+                    </div>,
+                    document.body
+                )}
+
+                {/* Banned Players Modal */}
+                {showBannedModal && ReactDOM.createPortal(
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+                        <div className="bg-gray-900 rounded-lg p-6 relative shadow-lg" style={{ width: '50rem', maxWidth: '90%' }}>
+                            <button onClick={closeBannedModal} className="absolute top-2 right-2 text-gray-500 hover:text-gray-700">×</button>
+                            <h2 className="text-lg font-semibold mb-4 text-white">Banned Players</h2>
+                            <ul>
+                                {bannedPlayers.map((player) => (
+                                    <li key={player.uuid} className="flex items-center justify-between p-2 bg-gray-800 rounded mb-2">
+                                        <div className="flex items-center space-x-3">
+                                            <img
+                                                src={player.avatarUrl || ''}
+                                                alt={`${player.name}'s avatar`}
+                                                className="w-8 h-8 rounded-full"
+                                            />
+                                            <span className="text-white">{player.name}</span>
+                                        </div>
+                                        <div className="flex space-x-2">
+                                            <button
+                                                onClick={() => openInfoModal(player)}
+                                                className="text-sm bg-blue-500 text-white px-2 py-1 rounded"
+                                            >
+                                                Info
+                                            </button>
+                                            <button
+                                                onClick={() => handleUnbanPlayer(player.name)}
+                                                className="text-sm bg-green-500 text-white px-2 py-1 rounded"
+                                            >
+                                                Unban
+                                            </button>
+                                        </div>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    </div>,
+                    document.body
+                )}
+
                 {/* Information Modal */}
                 {showInfoModal && selectedBannedPlayer && ReactDOM.createPortal(
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-                    <div className="bg-gray-900 rounded-lg p-6 relative shadow-lg" style={{ width: '50rem', maxWidth: '90%' }}>
-                        <button onClick={closeInfoModal} className="absolute top-2 right-2 text-gray-500 hover:text-gray-700">×</button>
-                        <h2 className="text-lg text-white font-semibold mb-4">Banned Player Information</h2>
-                        <div className="space-y-2 text-white">
-                            <p><strong>UUID:</strong> {selectedBannedPlayer.uuid}</p>
-                            <p><strong>Name:</strong> {selectedBannedPlayer.name}</p>
-                            <p><strong>Created:</strong> {selectedBannedPlayer.created}</p>
-                            <p><strong>Source:</strong> {selectedBannedPlayer.source}</p>
-                            <p><strong>Expires:</strong> {selectedBannedPlayer.expires}</p>
-                            <p><strong>Reason:</strong> {selectedBannedPlayer.reason}</p>
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+                        <div className="bg-gray-900 rounded-lg p-6 relative shadow-lg" style={{ width: '50rem', maxWidth: '90%' }}>
+                            <button onClick={closeInfoModal} className="absolute top-2 right-2 text-gray-500 hover:text-gray-700">×</button>
+                            <h2 className="text-lg font-semibold mb-4 text-white">Ban Information</h2>
+                            <div className="text-white">
+                                <p><strong>Name:</strong> {selectedBannedPlayer.name}</p>
+                                <p><strong>UUID:</strong> {selectedBannedPlayer.uuid}</p>
+                                <p><strong>Reason:</strong> {selectedBannedPlayer.reason}</p>
+                                <p><strong>Created:</strong> {selectedBannedPlayer.created}</p>
+                                <p><strong>Expires:</strong> {selectedBannedPlayer.expires}</p>
+                                <p><strong>Source:</strong> {selectedBannedPlayer.source}</p>
+                            </div>
                         </div>
-                    </div>
-                </div>,
-                document.body
-            )}
-        </div>
+                    </div>,
+                    document.body
+                )}
+            </div>
         </ServerContentBlock>
     );
 };

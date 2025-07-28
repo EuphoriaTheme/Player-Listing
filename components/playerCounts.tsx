@@ -1,6 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import getServer from '@/api/server/getServer';
 import { ServerContext } from '@/state/server';
+import { faUsers } from '@fortawesome/free-solid-svg-icons';
+import StatBlock from '@/components/server/console/StatBlock';
+
+// Define interfaces for egg-game mappings
+interface EggGameMapping {
+    egg_id: number;
+    game_id: string;
+    game_name: string;
+}
+
+// Support both string and object formats
+type EggGameMappingData = string | EggGameMapping;
 
 const PlayerCounts: React.FC = () => {
     const [maxPlayers, setMaxPlayers] = useState<number>(0);
@@ -10,12 +22,156 @@ const PlayerCounts: React.FC = () => {
     const [ip, setIp] = useState<string>('');
     const [port, setPort] = useState<number>(0);
     const uuid = ServerContext.useStoreState((state) => state.server.data?.uuid || null);
-    const [customPort, setCustomPort] = useState<string | null>(uuid ? localStorage.getItem(`${uuid}_customPort`) : null); // Load from localStorage
+    const [customPort, setCustomPort] = useState<string | null>(null);
+    const [customDomain, setCustomDomain] = useState<string>('');
     const [selectedGame, setSelectedGame] = useState<string | null>(null);
     const [serverDataLoading, setServerDataLoading] = useState<boolean>(true);
+    const [eggGameMappings, setEggGameMappings] = useState<EggGameMappingData[]>([]);
+    const [mappingsLoading, setMappingsLoading] = useState<boolean>(true);
+    const [settingsLoading, setSettingsLoading] = useState<boolean>(true);
+    const [configurationReady, setConfigurationReady] = useState<boolean>(false);
 
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
-    const BACKEND_API_URL = (window as any).SiteConfiguration.api_url || 'https://api.euphoriatheme.uk/api';
+    const DEFAULT_API_URL = 'https://api.euphoriadevelopment.uk/gameapi';
+    const [backendApiUrl, setBackendApiUrl] = useState<string>(DEFAULT_API_URL);
+    const serverUuid = uuid;
+
+    // Fetch egg-game mappings from admin settings
+    const fetchEggGameMappings = async () => {
+        try {
+            const response = await fetch('/extensions/playerlisting/admin/egg-game-mappings', {
+                method: 'GET',
+                headers: {
+                    'X-CSRF-TOKEN': csrfToken || '',
+                    'Content-Type': 'application/json',
+                },
+            });
+            
+            if (!response.ok) {
+                throw new Error('Failed to fetch egg-game mappings');
+            }
+            
+            const data = await response.json();
+            setEggGameMappings(data.mappings || []);
+        } catch (err) {
+            console.error('Failed to fetch egg-game mappings:', err);
+            setError('Failed to load game configuration');
+        } finally {
+            setMappingsLoading(false);
+        }
+    };
+
+    // Fetch custom API URL from admin settings
+    const fetchApiUrl = async () => {
+        try {
+            const response = await fetch('/extensions/playerlisting/api/playerlisting/api-url', {
+                method: 'GET',
+                headers: {
+                    'X-CSRF-TOKEN': csrfToken || '',
+                    'Content-Type': 'application/json',
+                },
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                const customApiUrl = data.api_url;
+                if (customApiUrl && customApiUrl.trim() !== '') {
+                    setBackendApiUrl(customApiUrl.trim());
+                    console.log('Using custom API URL:', customApiUrl.trim());
+                } else {
+                    setBackendApiUrl(DEFAULT_API_URL);
+                    console.log('Using default API URL:', DEFAULT_API_URL);
+                }
+            } else {
+                console.warn('Failed to fetch custom API URL, using default');
+                setBackendApiUrl(DEFAULT_API_URL);
+            }
+        } catch (err) {
+            console.error('Failed to fetch API URL:', err);
+            setBackendApiUrl(DEFAULT_API_URL);
+        }
+    };
+
+    // Load user settings for this server
+    const loadUserSettings = async () => {
+        if (!serverUuid) return;
+        
+        try {
+            const response = await fetch(`/extensions/playerlisting/api/user-settings?user_uuid=current_user&server_uuid=${serverUuid}`, {
+                method: 'GET',
+                headers: {
+                    'X-CSRF-TOKEN': csrfToken || '',
+                    'Content-Type': 'application/json',
+                }
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                const settings = data.settings || {};
+                
+                if (settings.custom_domain) {
+                    setCustomDomain(settings.custom_domain);
+                }
+                if (settings.custom_port) {
+                    setCustomPort(settings.custom_port);
+                }
+                if (settings.selected_game) {
+                    setSelectedGame(settings.selected_game);
+                }
+                
+                console.log('Loaded user settings:', settings);
+            }
+        } catch (err) {
+            console.error('Failed to load user settings:', err);
+        } finally {
+            setSettingsLoading(false);
+        }
+    };
+
+    // Get game for current server based on egg ID
+    const getGameForServer = (eggId: number): string | null => {
+        console.log('Looking for egg ID:', eggId, 'in mappings:', eggGameMappings);
+        
+        // Handle string-based mappings in format "gameName_eggId_displayName_gameId"
+        const mapping = eggGameMappings.find(mappingString => {
+            if (typeof mappingString === 'string') {
+                const parts = mappingString.split('_');
+                if (parts.length >= 2) {
+                    const mappingEggId = parseInt(parts[1], 10);
+                    return mappingEggId === eggId;
+                }
+            } else if (mappingString && typeof mappingString === 'object') {
+                // Handle object-based mappings
+                return mappingString.egg_id === eggId;
+            }
+            return false;
+        });
+        
+        console.log('Found mapping:', mapping);
+        
+        if (mapping) {
+            if (typeof mapping === 'string') {
+                // Parse string format: "gameName_eggId_displayName_gameId"
+                const parts = mapping.split('_');
+                if (parts.length >= 4) {
+                    const gameId = parts[3];
+                    console.log('Extracted game ID:', gameId);
+                    return gameId;
+                }
+            } else if (mapping && typeof mapping === 'object') {
+                // Handle object format
+                return mapping.game_id;
+            }
+        }
+        
+        return null;
+    };
+
+    useEffect(() => {
+        fetchEggGameMappings();
+        fetchApiUrl();
+        loadUserSettings();
+    }, []);
 
     useEffect(() => {
         const fetchServerData = async () => {
@@ -25,17 +181,52 @@ const PlayerCounts: React.FC = () => {
                 return;
             }
 
+            // Don't run if settings are still loading
+            if (settingsLoading) {
+                return;
+            }
+
             try {
                 const [server] = await getServer(uuid);
+                console.log('Server object:', server); // Debug log
+                
                 const defaultAllocation = server.allocations.find((allocation) => allocation.isDefault);
 
                 if (!defaultAllocation) {
                     throw new Error('No default allocation found for the server.');
                 }
 
-                setIp(server.sftpDetails.ip);
-                setPort(customPort ? parseInt(customPort, 10) : defaultAllocation.port);
-                setSelectedGame(localStorage.getItem(`${uuid}_selectedGame`));
+                // Use custom domain if set, otherwise use server's IP
+                const serverIp = customDomain || server.sftpDetails.ip;
+                const serverPort = customPort ? parseInt(customPort, 10) : defaultAllocation.port;
+                
+                setIp(serverIp);
+                setPort(serverPort);
+                
+                // Get game from user settings first, then fall back to egg-game mapping
+                if (!mappingsLoading && eggGameMappings.length > 0) {
+                    // If user has selected a game in settings, use that
+                    if (selectedGame) {
+                        console.log('Using selected game from user settings:', selectedGame);
+                        // Keep the user's selected game
+                    } else {
+                        // Fall back to egg-game mapping
+                        const serverEggId = (server as any).BlueprintFramework?.eggId;
+                        console.log('Server egg ID:', serverEggId); // Debug log
+                        
+                        if (serverEggId) {
+                            const gameId = getGameForServer(serverEggId);
+                            console.log('Mapped game ID:', gameId); // Debug log
+                            setSelectedGame(gameId);
+                        } else {
+                            console.log('No server egg ID found');
+                            setSelectedGame(null);
+                        }
+                    }
+                }
+                
+                // Mark configuration as ready
+                setConfigurationReady(true);
             } catch (err) {
                 console.error('Failed to fetch server details:', err);
                 setError('Failed to fetch server details.');
@@ -45,18 +236,19 @@ const PlayerCounts: React.FC = () => {
         };
 
         fetchServerData();
-    }, [uuid, customPort]);
+    }, [uuid, customDomain, customPort, mappingsLoading, eggGameMappings, selectedGame, settingsLoading]);
 
     useEffect(() => {
         const fetchPlayersFromAPI = async () => {
-            if (serverDataLoading || !ip || !port || !selectedGame) return;
+            if (serverDataLoading || mappingsLoading || settingsLoading || !configurationReady || !ip || !port || !selectedGame) return;
 
             setLoading(true);
             setError(null);
 
             try {
                 const targetURL = `/${selectedGame}/ip=${ip}&port=${port}`;
-                const apiURL = `${BACKEND_API_URL}${targetURL}`;
+                const apiURL = `${backendApiUrl}${targetURL}`;
+                console.log('Making API call to:', apiURL); // Debug log
                 const response = await fetch(apiURL);
 
                 if (!response.ok) {
@@ -65,33 +257,13 @@ const PlayerCounts: React.FC = () => {
 
                 const data = await response.json();
 
-                if (selectedGame === 'minecraft') {
-                    if (data.success && data.data) {
-                        setMaxPlayers(data.data.maxplayers);
-                        setNumPlayers(data.data.numplayers);
-                    } else {
-                        setError('Server is offline.');
-                    }
-                } else if (selectedGame === 'gta5f') {
-                    setMaxPlayers(parseInt(data.data.maxPlayers, 10));
-                    setNumPlayers(parseInt(data.data.numPlayers, 10));
-                } else if (selectedGame === 'beammp') {
-                    if (data.success && data.data) {
-                        const parsedData = JSON.parse(data.data.replace(/\\/g, ''));
-                        console.log(parsedData);
-                        setMaxPlayers(parseInt(parsedData.maxplayers, 10));
-                        setNumPlayers(parseInt(parsedData.players, 10));
-                    } else {
-                        setError('Server is offline.');
-                    }
+                if (data.success && data.data) {
+                    setMaxPlayers(data.data.maxplayers);
+                    setNumPlayers(data.data.numplayers);
                 } else {
-                    if (data.success && data.data) {
-                        setMaxPlayers(data.data.maxplayers);
-                        setNumPlayers(data.data.numplayers);
-                    } else {
-                        setError('Server is offline.');
-                    }
+                    setError('Server is offline.');
                 }
+
             } catch (err) {
                 console.error('An error occurred while fetching player data:', err);
                 setError('An error occurred while fetching player data.');
@@ -100,157 +272,24 @@ const PlayerCounts: React.FC = () => {
             }
         };
 
-        // Fetch player data immediately and then every 20 seconds
         fetchPlayersFromAPI();
         const interval = setInterval(fetchPlayersFromAPI, 20000);
+        return () => clearInterval(interval);
+    }, [serverDataLoading, mappingsLoading, settingsLoading, configurationReady, ip, port, selectedGame, backendApiUrl]);
 
-        return () => clearInterval(interval); // Cleanup interval on component unmount
-    }, [serverDataLoading, ip, port, selectedGame, BACKEND_API_URL]);
-
-    if (!selectedGame) {
-        return (
-            <div
-                className="style-module_2Vp6MaXq bg-gray-600 relative p-4 rounded serverid"
-                id="server-id-container"
-            >
-                <div className="style-module_OFB5PMuf bg-gray-700 rounded"></div>
-                <div className="style-module_1DtraXMW bg-gray-700 rounded">
-                    <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        viewBox="0 0 512 512"
-                        className="Icon___StyledSvg-sc-omsq29-0 ejRaBu text-gray-100"
-                    >
-                        <path
-                            fill="#ffffff"
-                            d="M224 256A128 128 0 1 0 224 0a128 128 0 1 0 0 256zm-45.7 48C79.8 304 0 383.8 0 482.3C0 498.7 13.3 512 29.7 512l388.6 0c16.4 0 29.7-13.3 29.7-29.7C448 383.8 368.2 304 269.7 304l-91.4 0z"
-                        />
-                    </svg>
-                </div>
-                <div className="flex flex-col justify-center overflow-hidden w-full mt-2">
-                    <p className="font-header leading-tight text-xs md:text-sm text-gray-200">Players Online</p>
-                    <p
-                        className="h-[1.75rem] w-full font-semibold text-gray-50 bg-transparent border-none outline-none"
-                        style={{
-                            fontSize: '115.625%',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                        }}
-                    >
-                        Not Setup
-                    </p>
-                </div>
-            </div>
-        );
-    }
-
-    if (loading) {
-        return (
-            <div
-                className="style-module_2Vp6MaXq bg-gray-600 relative p-4 rounded serverid"
-                id="server-id-container"
-            >
-                <div className="style-module_OFB5PMuf bg-gray-700 rounded"></div>
-                <div className="style-module_1DtraXMW bg-gray-700 rounded">
-                    <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        viewBox="0 0 512 512"
-                        className="Icon___StyledSvg-sc-omsq29-0 ejRaBu text-gray-100"
-                    >
-                        <path
-                            fill="#ffffff"
-                            d="M224 256A128 128 0 1 0 224 0a128 128 0 1 0 0 256zm-45.7 48C79.8 304 0 383.8 0 482.3C0 498.7 13.3 512 29.7 512l388.6 0c16.4 0 29.7-13.3 29.7-29.7C448 383.8 368.2 304 269.7 304l-91.4 0z"
-                        />
-                    </svg>
-                </div>
-                <div className="flex flex-col justify-center overflow-hidden w-full mt-2">
-                    <p className="font-header leading-tight text-xs md:text-sm text-gray-200">Players Online</p>
-                    <p
-                        className="h-[1.75rem] w-full font-semibold text-gray-50 bg-transparent border-none outline-none"
-                        style={{
-                            fontSize: '115.625%',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                        }}
-                    >
-                        Loading...
-                    </p>
-                </div>
-            </div>
-        );
-    }
-
-    if (error) {
-        return (
-            <div
-                className="style-module_2Vp6MaXq bg-gray-600 relative p-4 rounded serverid"
-                id="server-id-container"
-            >
-                <div className="style-module_OFB5PMuf bg-gray-700 rounded"></div>
-                <div className="style-module_1DtraXMW bg-gray-700 rounded">
-                    <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        viewBox="0 0 512 512"
-                        className="Icon___StyledSvg-sc-omsq29-0 ejRaBu text-gray-100"
-                    >
-                        <path
-                            fill="#ffffff"
-                            d="M224 256A128 128 0 1 0 224 0a128 128 0 1 0 0 256zm-45.7 48C79.8 304 0 383.8 0 482.3C0 498.7 13.3 512 29.7 512l388.6 0c16.4 0 29.7-13.3 29.7-29.7C448 383.8 368.2 304 269.7 304l-91.4 0z"
-                        />
-                    </svg>
-                </div>
-                <div className="flex flex-col justify-center overflow-hidden w-full mt-2">
-                    <p className="font-header leading-tight text-xs md:text-sm text-gray-200">Players Online</p>
-                    <p
-                        className="h-[1.75rem] w-full font-semibold text-gray-50 bg-transparent border-none outline-none"
-                        style={{
-                            fontSize: '115.625%',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                        }}
-                    >
-                        Not Available
-                    </p>
-                </div>
-            </div>
-        );
-    }
-
+    // Use StatBlock component for consistent styling
     return (
-        <div
-            className="style-module_2Vp6MaXq bg-gray-600 relative p-4 rounded serverid"
-            id="server-id-container"
-        >
-            <div className="style-module_OFB5PMuf bg-gray-700 rounded"></div>
-            <div className="style-module_1DtraXMW bg-gray-700 rounded">
-                <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="0 0 448 512"
-                    className="Icon___StyledSvg-sc-omsq29-0 ejRaBu text-gray-100"
-                >
-                    <path
-                        fill="#ffffff"
-                        d="M224 256A128 128 0 1 0 224 0a128 128 0 1 0 0 256zm-45.7 48C79.8 304 0 383.8 0 482.3C0 498.7 13.3 512 29.7 512l388.6 0c16.4 0 29.7-13.3 29.7-29.7C448 383.8 368.2 304 269.7 304l-91.4 0z"
-                    />
-                </svg>
-            </div>
-            <div className="flex flex-col justify-center overflow-hidden w-full mt-2">
-                <p className="font-header leading-tight text-xs md:text-sm text-gray-200">Players Online</p>
-                <p
-                    className="h-[1.75rem] w-full font-semibold text-gray-50 bg-transparent border-none outline-none"
-                    style={{
-                        fontSize: '115.625%',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                    }}
-                >
-                    {numPlayers} / {maxPlayers} Connected
-                </p>
-            </div>
-        </div>
+        <StatBlock icon={faUsers} title={'Players Online'}>
+            {(() => {
+                if (mappingsLoading || serverDataLoading || settingsLoading) return <span className="text-gray-400">Loading...</span>;
+                if (!selectedGame) return <span className="text-gray-400">Not Setup</span>;
+                if (loading) return <span className="text-gray-400">Loading...</span>;
+                if (error) return <span className="text-red-400">Not Available</span>;
+                return (
+                    <span className="font-semibold text-gray-50">{numPlayers} / {maxPlayers}</span>
+                );
+            })()}
+        </StatBlock>
     );
 };
 

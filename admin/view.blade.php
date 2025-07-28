@@ -1,16 +1,552 @@
-<!-- Version and Information Box (Full Width) -->
 <div class="row">
     <div class="col-xs-12">
         <div class="box box-primary">
             <div class="box-header with-border">
-                <h3 class="box-title"><strong>{name}</strong> by <strong>{author}</strong></h3>
+                <h3 class="box-title">Egg to Game Mapping</h3>
             </div>
             <div class="box-body">
-                <p>Identifier: <code>{identifier}</code><br>
-                <p>Uninstall using: <code>blueprint -remove {identifier}</code><br>
-                <p>If any errors occur use redprint! <code>bash <(curl -s https://redprint.zip)</code><br>
-                <p>Get support via <a href="https://discord.gg/Cus2zP4pPH" target="_blank" rel="noopener noreferrer">Discord</a>.<br>
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="form-group">
+                            <label for="egg-select">Select Eggs</label>
+                            <select id="egg-select" class="form-control" multiple size="8">
+                                <option value="" disabled>Loading eggs...</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="form-group">
+                            <label for="game-search">Search Games</label>
+                            <input type="text" id="game-search" class="form-control" placeholder="Search for games...">
+                        </div>
+                        <div class="form-group">
+                            <label for="game-select">Select Game</label>
+                            <select id="game-select" class="form-control" size="8">
+                                <option value="" disabled>Loading games...</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <div class="btn-group btn-group-sm">
+                                <button type="button" id="prev-page" class="btn btn-default">Previous</button>
+                                <button type="button" id="next-page" class="btn btn-default">Next</button>
+                            </div>
+                            <span id="page-info" class="text-muted ml-2">Page 1 of 1</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-md-12">
+                        <button type="button" id="save-egg-game-mapping" class="btn btn-success">Save Mapping</button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
 </div>
+
+<div class="row">
+    <div class="col-xs-12">
+        <div class="box box-info">
+            <div class="box-header with-border">
+                <h3 class="box-title">Current Mappings</h3>
+            </div>
+            <div class="box-body">
+                <div id="egg-game-mapping-list">
+                    <p class="text-muted">Loading mappings...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-xs-12">
+        <div class="box box-warning">
+            <div class="box-header with-border">
+                <h3 class="box-title">API Configuration</h3>
+            </div>
+            <div class="box-body">
+                <div class="form-group">
+                    <label for="api-url">Custom API URL</label>
+                    <input type="text" id="api-url" class="form-control" placeholder="https://api.euphoriadevelopment.uk/gameapi">
+                    <p class="help-block">
+                        Set a custom API URL for the game data service. Leave empty to use the default URL.
+                        <br><strong>Default:</strong> https://api.euphoriadevelopment.uk/gameapi
+                    </p>
+                </div>
+                <div class="form-group">
+                    <button type="button" id="save-api-url" class="btn btn-warning">Save API URL</button>
+                    <button type="button" id="reset-api-url" class="btn btn-default">Reset to Default</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.mapping-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px;
+    margin: 5px 0;
+    background: #302e2eff;
+    border-radius: 4px;
+    border: 1px solid #ddd;
+}
+
+.mapping-info {
+    flex: 1;
+}
+
+.mapping-info strong {
+    color: #ffffff;
+}
+
+.mapping-info small {
+    color: #666;
+    display: block;
+    margin-top: 2px;
+}
+
+.btn-danger {
+    background-color: #d9534f;
+    border-color: #d43f3a;
+}
+
+.btn-danger:hover {
+    background-color: #c9302c;
+    border-color: #ac2925;
+}
+
+#egg-select, #game-select {
+    min-height: 180px;
+}
+
+.btn-group {
+    margin-top: 10px;
+}
+
+.text-muted {
+    margin-left: 10px;
+}
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', async function () {
+    const eggSelect = document.getElementById('egg-select');
+    const gameSelect = document.getElementById('game-select');
+    const gameSearch = document.getElementById('game-search');
+    const saveButton = document.getElementById('save-egg-game-mapping');
+    const mappingList = document.getElementById('egg-game-mapping-list');
+    const prevPageBtn = document.getElementById('prev-page');
+    const nextPageBtn = document.getElementById('next-page');
+    const pageInfo = document.getElementById('page-info');
+
+    // Use direct URLs for the endpoints
+    const eggsUrl = "/extensions/playerlisting/admin/eggs";
+    const mappingsUrl = "/extensions/playerlisting/admin/egg-game-mappings";
+
+    console.log('Eggs URL:', eggsUrl);
+    console.log('Mappings URL:', mappingsUrl);
+
+    let eggs = [];
+    let games = [];
+    let filteredGames = [];
+    let currentPage = 1;
+    let pageSize = 10;
+    let totalPages = 1;
+
+    // Fetch eggs
+    const fetchEggs = async () => {
+        try {
+            console.log('Fetching eggs from:', eggsUrl);
+            const csrfToken = '{{ csrf_token() }}';
+            console.log('CSRF token:', csrfToken);
+            
+            const response = await fetch(eggsUrl, { 
+                method: 'GET',
+                headers: {
+                    'X-CSRF-TOKEN': csrfToken,
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            console.log('Response status:', response.status);
+            
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('Response error:', errorText);
+                throw new Error(`Failed to fetch eggs: ${response.status} ${response.statusText}`);
+            }
+            const data = await response.json();
+            if (!data.eggs || !Array.isArray(data.eggs)) {
+                throw new Error('Invalid eggs data received');
+            }
+            return data.eggs;
+        } catch (e) {
+            console.error('Error loading eggs:', e);
+            alert('Error loading eggs: ' + e.message);
+            return [];
+        }
+    };
+
+    // Fetch games
+    const fetchGames = async () => {
+        try {
+            const response = await fetch('https://api.euphoriadevelopment.uk/gameapi/', { method: 'GET' });
+            if (!response.ok) {
+                throw new Error('Failed to fetch games');
+            }
+            const data = await response.json();
+            // The API returns an object with game names as keys, and {id, image} as value
+            // Convert to array of { name, id, image }
+            return Object.entries(data).map(([name, value]) => ({ name, id: value.id, image: value.image }));
+        } catch (e) {
+            console.error('Error loading games:', e);
+            alert('Error loading games: ' + e.message);
+            return [];
+        }
+    };
+
+    // Fetch mappings
+    const fetchMappings = async () => {
+        try {
+            const response = await fetch(mappingsUrl, { 
+                method: 'GET',
+                headers: {
+                    'X-CSRF-TOKEN': '{{ csrf_token() }}',
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                }
+            });
+            if (!response.ok) {
+                throw new Error('Failed to fetch mappings');
+            }
+            const data = await response.json();
+            return data.mappings || [];
+        } catch (e) {
+            console.error('Error loading mappings:', e);
+            return [];
+        }
+    };
+
+    // Populate eggs dropdown
+    const populateEggs = (eggs) => {
+        eggSelect.innerHTML = '';
+        if (!eggs.length) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'No eggs found';
+            option.disabled = true;
+            eggSelect.appendChild(option);
+            return;
+        }
+        eggs.forEach(egg => {
+            if (egg && egg.id && egg.name) {
+                const option = document.createElement('option');
+                option.value = egg.id;
+                option.textContent = egg.name;
+                eggSelect.appendChild(option);
+            }
+        });
+    };
+
+    // Paginate and populate games dropdown
+    const updateGameDropdown = () => {
+        gameSelect.innerHTML = '';
+        totalPages = Math.ceil(filteredGames.length / pageSize) || 1;
+        currentPage = Math.max(1, Math.min(currentPage, totalPages));
+        const start = (currentPage - 1) * pageSize;
+        const end = start + pageSize;
+        
+        const gamesToShow = filteredGames.slice(start, end);
+        
+        if (gamesToShow.length === 0) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'No games found';
+            option.disabled = true;
+            gameSelect.appendChild(option);
+        } else {
+            gamesToShow.forEach(game => {
+                const option = document.createElement('option');
+                option.value = game.id;
+                option.textContent = game.name;
+                option.setAttribute('data-image', game.image || '');
+                gameSelect.appendChild(option);
+            });
+        }
+        
+        pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+        prevPageBtn.disabled = currentPage === 1;
+        nextPageBtn.disabled = currentPage === totalPages;
+    };
+
+    // Search filter
+    gameSearch.addEventListener('input', () => {
+        const query = gameSearch.value.toLowerCase();
+        filteredGames = games.filter(game => game.name.toLowerCase().includes(query));
+        currentPage = 1;
+        updateGameDropdown();
+    });
+
+    prevPageBtn.addEventListener('click', () => {
+        if (currentPage > 1) {
+            currentPage--;
+            updateGameDropdown();
+        }
+    });
+
+    nextPageBtn.addEventListener('click', () => {
+        if (currentPage < totalPages) {
+            currentPage++;
+            updateGameDropdown();
+        }
+    });
+
+    // Save mapping
+    saveButton.addEventListener('click', async () => {
+        const selectedEggOptions = Array.from(eggSelect.selectedOptions);
+        const selectedEggs = selectedEggOptions.map(opt => ({ id: opt.value, name: opt.textContent }));
+        const selectedGameOption = gameSelect.selectedOptions[0];
+        
+        if (!selectedEggs.length || !selectedGameOption) {
+            alert('Please select at least one Egg and a Game.');
+            return;
+        }
+        
+        const selectedGameId = selectedGameOption.value;
+        const selectedGameName = selectedGameOption.textContent;
+        const csrfToken = '{{ csrf_token() }}';
+        
+        // Get existing mappings
+        const existingMappings = await fetchMappings();
+        
+        // Add new mappings
+        const newMappings = selectedEggs.map(egg => `${egg.name}_${egg.id}_${selectedGameName}_${selectedGameId}`);
+        const allMappings = [...existingMappings, ...newMappings];
+        
+        try {
+            const response = await fetch(mappingsUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': csrfToken,
+                },
+                body: JSON.stringify({ mappings: allMappings }),
+            });
+            
+            const data = await response.json();
+            if (data.success) {
+                alert('Mapping saved successfully!');
+                await populateMappings();
+                // Clear selections
+                eggSelect.selectedIndex = -1;
+                gameSelect.selectedIndex = -1;
+            } else {
+                alert('Error saving mapping: ' + (data.error || 'Unknown error'));
+            }
+        } catch (e) {
+            console.error('Error saving mapping:', e);
+            alert('Error saving mapping: ' + e.message);
+        }
+    });
+
+    // Delete mapping
+    const deleteMapping = async (mapping) => {
+        if (!confirm('Are you sure you want to delete this mapping?')) return;
+        
+        try {
+            // Fetch all mappings, remove the selected one, and save
+            let mappings = await fetchMappings();
+            mappings = mappings.filter(m => m !== mapping);
+            
+            const csrfToken = '{{ csrf_token() }}';
+            const response = await fetch(mappingsUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': csrfToken,
+                },
+                body: JSON.stringify({ mappings }),
+            });
+            
+            const data = await response.json();
+            if (data.success) {
+                alert('Mapping deleted successfully!');
+                await populateMappings();
+            } else {
+                alert('Error deleting mapping: ' + (data.error || 'Unknown error'));
+            }
+        } catch (e) {
+            console.error('Error deleting mapping:', e);
+            alert('Error deleting mapping: ' + e.message);
+        }
+    };
+
+    // Populate mappings list (show all, with delete buttons)
+    const populateMappings = async () => {
+        const mappings = await fetchMappings();
+        mappingList.innerHTML = '';
+        
+        if (!Array.isArray(mappings) || mappings.length === 0) {
+            mappingList.innerHTML = '<p class="text-muted">No mappings found. Create your first mapping above.</p>';
+            return;
+        }
+        
+        mappings.forEach(mapping => {
+            const parts = mapping.split('_');
+            if (parts.length >= 4) {
+                const eggName = parts[0];
+                const eggId = parts[1];
+                const gameName = parts[2];
+                const gameId = parts[3];
+                
+                const div = document.createElement('div');
+                div.className = 'mapping-item';
+                
+                div.innerHTML = `
+                    <div class="mapping-info">
+                        <strong>${eggName}</strong> (ID: ${eggId})
+                        <small>→ ${gameName} (${gameId})</small>
+                    </div>
+                    <button class="btn btn-danger btn-sm delete-mapping" data-mapping="${mapping}">Delete</button>
+                `;
+                
+                mappingList.appendChild(div);
+            }
+        });
+        
+        // Add event listeners to delete buttons
+        document.querySelectorAll('.delete-mapping').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const mapping = e.target.getAttribute('data-mapping');
+                deleteMapping(mapping);
+            });
+        });
+    };
+
+    // API URL Management
+    const apiUrlInput = document.getElementById('api-url');
+    const saveApiUrlBtn = document.getElementById('save-api-url');
+    const resetApiUrlBtn = document.getElementById('reset-api-url');
+    const apiUrlEndpoint = '/extensions/playerlisting/admin/api-url';
+
+    // Fetch current API URL
+    const fetchApiUrl = async () => {
+        try {
+            const csrfToken = '{{ csrf_token() }}';
+            const response = await fetch(apiUrlEndpoint, {
+                method: 'GET',
+                headers: {
+                    'X-CSRF-TOKEN': csrfToken,
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                apiUrlInput.value = data.api_url || '';
+            }
+        } catch (e) {
+            console.error('Error fetching API URL:', e);
+        }
+    };
+
+    // Save API URL
+    saveApiUrlBtn.addEventListener('click', async () => {
+        const apiUrl = apiUrlInput.value.trim();
+        const csrfToken = '{{ csrf_token() }}';
+        
+        try {
+            const response = await fetch(apiUrlEndpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': csrfToken,
+                },
+                body: JSON.stringify({ api_url: apiUrl }),
+            });
+            
+            const data = await response.json();
+            if (data.success) {
+                alert('API URL saved successfully!');
+            } else {
+                alert('Error saving API URL: ' + (data.error || 'Unknown error'));
+            }
+        } catch (e) {
+            console.error('Error saving API URL:', e);
+            alert('Error saving API URL: ' + e.message);
+        }
+    });
+
+    // Reset API URL
+    resetApiUrlBtn.addEventListener('click', async () => {
+        if (!confirm('Are you sure you want to reset the API URL to default?')) return;
+        
+        const csrfToken = '{{ csrf_token() }}';
+        
+        try {
+            const response = await fetch(apiUrlEndpoint, {
+                method: 'DELETE',
+                headers: {
+                    'X-CSRF-TOKEN': csrfToken,
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            const data = await response.json();
+            if (data.success) {
+                apiUrlInput.value = '';
+                alert('API URL reset to default successfully!');
+            } else {
+                alert('Error resetting API URL: ' + (data.error || 'Unknown error'));
+            }
+        } catch (e) {
+            console.error('Error resetting API URL:', e);
+            alert('Error resetting API URL: ' + e.message);
+        }
+    });
+
+    // Initial load
+    try {
+        eggs = await fetchEggs();
+        console.log('Loaded eggs:', eggs);
+    } catch (e) {
+        console.error('Failed to load eggs:', e);
+        alert('Failed to load eggs.');
+        eggs = [];
+    }
+    
+    try {
+        games = await fetchGames();
+        console.log('Loaded games:', games);
+    } catch (e) {
+        console.error('Failed to load games:', e);
+        alert('Failed to load games.');
+        games = [];
+    }
+    
+    filteredGames = games;
+    populateEggs(eggs);
+    updateGameDropdown();
+    
+    try {
+        await populateMappings();
+    } catch (e) {
+        console.error('Failed to load mappings:', e);
+        alert('Failed to load mappings.');
+    }
+    
+    // Load current API URL
+    try {
+        await fetchApiUrl();
+    } catch (e) {
+        console.error('Failed to load API URL:', e);
+    }
+});
+</script>

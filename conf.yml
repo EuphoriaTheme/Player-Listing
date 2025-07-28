@@ -3,15 +3,15 @@ info:
   identifier: "playerlisting"
   description: "Player Listing Addon using Blueprint!"
   flags: ""
-  version: "v1.5.3"
+  version: "1.6.0"
   target: "beta-2024-12"
   author: "Euphoria Development"
   icon: "playerlisting_icon.jpg"
-  website: "https://euphoriadevelopment.uk"
+  website: "https://euphoriatheme.uk"
 
 admin:
   view: "admin/view.blade.php"
-  controller: ""
+  controller: "admin/controller.php"
   css: ""
   wrapper: ""
 
@@ -31,7 +31,7 @@ requests:
   routers:
     application: ""
     client: ""
-    web: ""
+    web: "routes/web.php"
 
 database:
   migrations: ""
