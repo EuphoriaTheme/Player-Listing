@@ -154,6 +154,27 @@ class playerlistingExtensionController extends Controller
             return response()->json(['error' => 'Failed to reset API URL'], 500);
         }
     }
+
+    public function getConsoleConfig(): \Illuminate\Http\JsonResponse
+    {
+        try {
+            $showConsolePlayers = $this->settings->get('playerlisting::show_console_players', false);
+            return response()->json(['show_console_players' => (bool)$showConsolePlayers]);
+        } catch (\Exception $e) {
+            return response()->json(['error' => 'Failed to fetch console configuration'], 500);
+        }
+    }
+
+    public function saveConsoleConfig(Request $request): \Illuminate\Http\JsonResponse
+    {
+        try {
+            $showConsolePlayers = $request->input('show_console_players', false);
+            $this->settings->set('playerlisting::show_console_players', (bool)$showConsolePlayers);
+            return response()->json(['success' => true]);
+        } catch (\Exception $e) {
+            return response()->json(['error' => 'Failed to save console configuration'], 500);
+        }
+    }
 }
 
 class playerlistingSettingsFormRequest extends AdminFormRequest

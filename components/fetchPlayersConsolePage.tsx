@@ -66,6 +66,8 @@ const fetchPlayers: React.FC = () => {
     const [activeTab, setActiveTab] = useState<'server' | 'settings'>('server');
     const [customDomain, setCustomDomain] = useState<string>('');
     const [settingsLoading, setSettingsLoading] = useState<boolean>(true);
+    const [consoleConfigLoading, setConsoleConfigLoading] = useState<boolean>(true);
+    const [showOnConsole, setShowOnConsole] = useState<boolean>(false);
 
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
     const DEFAULT_API_URL = 'https://api.euphoriadevelopment.uk/gameapi';
@@ -124,6 +126,33 @@ const fetchPlayers: React.FC = () => {
         } catch (err) {
             console.error('Failed to fetch API URL:', err);
             setBackendApiUrl(DEFAULT_API_URL);
+        }
+    };
+
+    // Fetch console configuration
+    const fetchConsoleConfig = async () => {
+        try {
+            const response = await fetch('/extensions/playerlisting/api/playerlisting/console-config', {
+                method: 'GET',
+                headers: {
+                    'X-CSRF-TOKEN': csrfToken || '',
+                    'Content-Type': 'application/json',
+                },
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                setShowOnConsole(data.show_console_players || false);
+                console.log('Console display setting:', data.show_console_players);
+            } else {
+                console.warn('Failed to fetch console configuration, hiding console display');
+                setShowOnConsole(false);
+            }
+        } catch (err) {
+            console.error('Failed to fetch console configuration:', err);
+            setShowOnConsole(false);
+        } finally {
+            setConsoleConfigLoading(false);
         }
     };
 
@@ -290,11 +319,12 @@ const fetchPlayers: React.FC = () => {
         }
     };
 
-    // Load mappings, API URL, and user settings on component mount
+    // Load mappings, API URL, user settings, and console config on component mount
     useEffect(() => {
         fetchEggGameMappings();
         fetchApiUrl();
         loadUserSettings();
+        fetchConsoleConfig();
     }, []);
 
     // Update available games when mappings change
@@ -893,8 +923,18 @@ const fetchPlayers: React.FC = () => {
         }
     };
 
+    // Don't render if console config is still loading
+    if (consoleConfigLoading) {
+        return null;
+    }
+
+    // Don't render if admin has disabled console display
+    if (!showOnConsole) {
+        return null;
+    }
+
     return (
-        <ServerContentBlock title={'Player Management'}>
+        <ServerContentBlock title={'Console'}>
             <div className="minecraft-players-container bg-gray-900 p-6 rounded-lg relative">
                 {/* Tab Navigation */}
                 <div className="flex border-b border-gray-700 pb-4 mb-4">

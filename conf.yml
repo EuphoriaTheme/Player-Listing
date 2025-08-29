@@ -3,7 +3,7 @@ info:
   identifier: "playerlisting"
   description: "Player Listing Addon using Blueprint!"
   flags: ""
-  version: "1.6.0"
+  version: "1.6.1"
   target: "beta-2024-12"
   author: "Euphoria Development"
   icon: "playerlisting_icon.jpg"

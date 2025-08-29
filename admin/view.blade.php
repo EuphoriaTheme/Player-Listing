@@ -61,6 +61,30 @@
 
 <div class="row">
     <div class="col-xs-12">
+        <div class="box box-success">
+            <div class="box-header with-border">
+                <h3 class="box-title">Console Page Configuration</h3>
+            </div>
+            <div class="box-body">
+                <div class="form-group">
+                    <label class="checkbox-inline">
+                        <input type="checkbox" id="show-console-players" value="1">
+                        Show Player List on Console Page
+                    </label>
+                    <p class="help-block">
+                        When enabled, the player list will be displayed on the server console page alongside the terminal.
+                    </p>
+                </div>
+                <div class="form-group">
+                    <button type="button" id="save-console-config" class="btn btn-success">Save Console Configuration</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-xs-12">
         <div class="box box-warning">
             <div class="box-header with-border">
                 <h3 class="box-title">API Configuration</h3>
@@ -97,6 +121,8 @@
 
 .mapping-info {
     flex: 1;
+    display: flex;
+    align-items: center;
 }
 
 .mapping-info strong {
@@ -107,6 +133,34 @@
     color: #666;
     display: block;
     margin-top: 2px;
+}
+
+.game-image {
+    width: 32px;
+    height: 32px;
+    object-fit: cover;
+    border-radius: 4px;
+    margin-right: 10px;
+    border: 1px solid #ddd;
+}
+
+.game-image-placeholder {
+    width: 32px;
+    height: 32px;
+    background-color: #ccc;
+    border-radius: 4px;
+    margin-right: 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #ddd;
+    color: #666;
+    font-size: 12px;
+}
+
+.game-image-placeholder::after {
+    content: "?";
+    font-weight: bold;
 }
 
 .btn-danger {
@@ -396,6 +450,12 @@ document.addEventListener('DOMContentLoaded', async function () {
             return;
         }
         
+        // Create a lookup map for game images
+        const gameImageMap = {};
+        games.forEach(game => {
+            gameImageMap[game.id] = game.image;
+        });
+        
         mappings.forEach(mapping => {
             const parts = mapping.split('_');
             if (parts.length >= 4) {
@@ -403,14 +463,23 @@ document.addEventListener('DOMContentLoaded', async function () {
                 const eggId = parts[1];
                 const gameName = parts[2];
                 const gameId = parts[3];
+                const gameImage = gameImageMap[gameId];
                 
                 const div = document.createElement('div');
                 div.className = 'mapping-item';
                 
+                // Build the image HTML if image exists
+                const imageHtml = gameImage ? 
+                    `<img src="${gameImage}" alt="${gameName}" class="game-image" style="width: 32px; height: 32px; object-fit: cover; border-radius: 4px; margin-right: 10px;">` : 
+                    '<div class="game-image-placeholder" style="width: 32px; height: 32px; background-color: #ccc; border-radius: 4px; margin-right: 10px; display: inline-block;"></div>';
+                
                 div.innerHTML = `
-                    <div class="mapping-info">
-                        <strong>${eggName}</strong> (ID: ${eggId})
-                        <small>→ ${gameName} (${gameId})</small>
+                    <div class="mapping-info" style="display: flex; align-items: center;">
+                        ${imageHtml}
+                        <div>
+                            <strong>${eggName}</strong> (ID: ${eggId})
+                            <small>→ ${gameName} (${gameId})</small>
+                        </div>
                     </div>
                     <button class="btn btn-danger btn-sm delete-mapping" data-mapping="${mapping}">Delete</button>
                 `;
@@ -434,6 +503,11 @@ document.addEventListener('DOMContentLoaded', async function () {
     const resetApiUrlBtn = document.getElementById('reset-api-url');
     const apiUrlEndpoint = '/extensions/playerlisting/admin/api-url';
 
+    // Console Configuration Management
+    const showConsolePlayersCheckbox = document.getElementById('show-console-players');
+    const saveConsoleConfigBtn = document.getElementById('save-console-config');
+    const consoleConfigEndpoint = '/extensions/playerlisting/admin/console-config';
+
     // Fetch current API URL
     const fetchApiUrl = async () => {
         try {
@@ -453,6 +527,28 @@ document.addEventListener('DOMContentLoaded', async function () {
             }
         } catch (e) {
             console.error('Error fetching API URL:', e);
+        }
+    };
+
+    // Fetch current console configuration
+    const fetchConsoleConfig = async () => {
+        try {
+            const csrfToken = '{{ csrf_token() }}';
+            const response = await fetch(consoleConfigEndpoint, {
+                method: 'GET',
+                headers: {
+                    'X-CSRF-TOKEN': csrfToken,
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                showConsolePlayersCheckbox.checked = data.show_console_players || false;
+            }
+        } catch (e) {
+            console.error('Error fetching console config:', e);
         }
     };
 
@@ -480,6 +576,33 @@ document.addEventListener('DOMContentLoaded', async function () {
         } catch (e) {
             console.error('Error saving API URL:', e);
             alert('Error saving API URL: ' + e.message);
+        }
+    });
+
+    // Save Console Configuration
+    saveConsoleConfigBtn.addEventListener('click', async () => {
+        const showConsolePlayers = showConsolePlayersCheckbox.checked;
+        const csrfToken = '{{ csrf_token() }}';
+        
+        try {
+            const response = await fetch(consoleConfigEndpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': csrfToken,
+                },
+                body: JSON.stringify({ show_console_players: showConsolePlayers }),
+            });
+            
+            const data = await response.json();
+            if (data.success) {
+                alert('Console configuration saved successfully!');
+            } else {
+                alert('Error saving console configuration: ' + (data.error || 'Unknown error'));
+            }
+        } catch (e) {
+            console.error('Error saving console configuration:', e);
+            alert('Error saving console configuration: ' + e.message);
         }
     });
 
@@ -547,6 +670,13 @@ document.addEventListener('DOMContentLoaded', async function () {
         await fetchApiUrl();
     } catch (e) {
         console.error('Failed to load API URL:', e);
+    }
+
+    // Load current console configuration
+    try {
+        await fetchConsoleConfig();
+    } catch (e) {
+        console.error('Failed to load console configuration:', e);
     }
 });
 </script>

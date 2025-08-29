@@ -9,8 +9,13 @@ Route::get('/admin/api-url', [Pterodactyl\Http\Controllers\Admin\Extensions\play
 Route::post('/admin/api-url', [Pterodactyl\Http\Controllers\Admin\Extensions\playerlisting\playerlistingExtensionController::class, 'saveApiUrl'])->name('blueprint.extensions.playerlisting.api-url.save');
 Route::delete('/admin/api-url', [Pterodactyl\Http\Controllers\Admin\Extensions\playerlisting\playerlistingExtensionController::class, 'resetApiUrl'])->name('blueprint.extensions.playerlisting.api-url.reset');
 
+// Console configuration routes
+Route::get('/admin/console-config', [Pterodactyl\Http\Controllers\Admin\Extensions\playerlisting\playerlistingExtensionController::class, 'getConsoleConfig'])->name('blueprint.extensions.playerlisting.console-config');
+Route::post('/admin/console-config', [Pterodactyl\Http\Controllers\Admin\Extensions\playerlisting\playerlistingExtensionController::class, 'saveConsoleConfig'])->name('blueprint.extensions.playerlisting.console-config.save');
+
 // Frontend API URL access (accessible from server pages)
 Route::get('/api/playerlisting/api-url', [Pterodactyl\Http\Controllers\Admin\Extensions\playerlisting\playerlistingExtensionController::class, 'getApiUrl'])->name('blueprint.extensions.playerlisting.frontend.api-url');
+Route::get('/api/playerlisting/console-config', [Pterodactyl\Http\Controllers\Admin\Extensions\playerlisting\playerlistingExtensionController::class, 'getConsoleConfig'])->name('blueprint.extensions.playerlisting.frontend.console-config');
 
 // User settings routes
 Route::get('/api/user-settings', [Pterodactyl\Http\Controllers\Admin\Extensions\playerlisting\playerlistingExtensionController::class, 'getUserSettings'])->name('blueprint.extensions.playerlisting.user-settings');

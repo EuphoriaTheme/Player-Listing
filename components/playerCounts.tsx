@@ -109,17 +109,47 @@ const PlayerCounts: React.FC = () => {
                 const data = await response.json();
                 const settings = data.settings || {};
                 
-                if (settings.custom_domain) {
-                    setCustomDomain(settings.custom_domain);
+                // Validate and set custom domain
+                if (settings.custom_domain && typeof settings.custom_domain === 'string') {
+                    const trimmedDomain = settings.custom_domain.trim();
+                    if (trimmedDomain.length > 0 && trimmedDomain !== 'undefined' && trimmedDomain !== 'null') {
+                        setCustomDomain(trimmedDomain);
+                        console.log('Loaded custom domain:', trimmedDomain);
+                    }
                 }
+                
+                // Validate and set custom port
                 if (settings.custom_port) {
-                    setCustomPort(settings.custom_port);
+                    let portValue: string | null = null;
+                    if (typeof settings.custom_port === 'string') {
+                        portValue = settings.custom_port.trim();
+                    } else if (typeof settings.custom_port === 'number') {
+                        portValue = settings.custom_port.toString();
+                    }
+                    
+                    if (portValue && portValue !== '' && portValue !== 'undefined' && portValue !== 'null') {
+                        const parsedPort = parseInt(portValue, 10);
+                        if (!isNaN(parsedPort) && parsedPort > 0 && parsedPort <= 65535) {
+                            setCustomPort(portValue);
+                            console.log('Loaded custom port:', parsedPort);
+                        } else {
+                            console.warn('Invalid custom port in settings:', settings.custom_port);
+                        }
+                    }
                 }
-                if (settings.selected_game) {
-                    setSelectedGame(settings.selected_game);
+                
+                // Set selected game
+                if (settings.selected_game && typeof settings.selected_game === 'string') {
+                    const gameId = settings.selected_game.trim();
+                    if (gameId.length > 0 && gameId !== 'undefined' && gameId !== 'null') {
+                        setSelectedGame(gameId);
+                        console.log('Loaded selected game:', gameId);
+                    }
                 }
                 
                 console.log('Loaded user settings:', settings);
+            } else {
+                console.warn('Failed to load user settings:', response.status, response.statusText);
             }
         } catch (err) {
             console.error('Failed to load user settings:', err);
@@ -196,9 +226,30 @@ const PlayerCounts: React.FC = () => {
                     throw new Error('No default allocation found for the server.');
                 }
 
-                // Use custom domain if set, otherwise use server's IP
-                const serverIp = customDomain || server.sftpDetails.ip;
-                const serverPort = customPort ? parseInt(customPort, 10) : defaultAllocation.port;
+                // Use custom domain if set and valid, otherwise use server's IP
+                let serverIp = server.sftpDetails.ip;
+                if (customDomain && customDomain.trim() !== '') {
+                    const trimmedDomain = customDomain.trim();
+                    // Basic validation for domain/IP format
+                    if (trimmedDomain.length > 0 && !trimmedDomain.includes(' ') && trimmedDomain !== 'undefined' && trimmedDomain !== 'null') {
+                        serverIp = trimmedDomain;
+                        console.log('Using custom domain:', trimmedDomain);
+                    } else {
+                        console.warn('Invalid custom domain format, using default IP:', server.sftpDetails.ip);
+                    }
+                }
+                
+                // Use custom port if set and valid, otherwise use server's port
+                let serverPort = defaultAllocation.port;
+                if (customPort && customPort.trim() !== '') {
+                    const parsedPort = parseInt(customPort.trim(), 10);
+                    if (!isNaN(parsedPort) && parsedPort > 0 && parsedPort <= 65535) {
+                        serverPort = parsedPort;
+                        console.log('Using custom port:', parsedPort);
+                    } else {
+                        console.warn('Invalid custom port format, using default port:', defaultAllocation.port);
+                    }
+                }
                 
                 setIp(serverIp);
                 setPort(serverPort);
@@ -240,33 +291,74 @@ const PlayerCounts: React.FC = () => {
 
     useEffect(() => {
         const fetchPlayersFromAPI = async () => {
-            if (serverDataLoading || mappingsLoading || settingsLoading || !configurationReady || !ip || !port || !selectedGame) return;
+            if (serverDataLoading || mappingsLoading || settingsLoading || !configurationReady || !selectedGame) {
+                return;
+            }
+
+            // Validate IP and port before making API call
+            if (!ip || !port || ip.trim() === '' || port <= 0 || port > 65535) {
+                console.warn('Invalid IP or port configuration:', { ip, port });
+                setError('Invalid server configuration.');
+                return;
+            }
 
             setLoading(true);
             setError(null);
 
             try {
-                const targetURL = `/${selectedGame}/ip=${ip}&port=${port}`;
+                // Ensure IP doesn't have protocol prefix
+                const cleanIp = ip.replace(/^https?:\/\//, '').trim();
+                const targetURL = `/${selectedGame}/ip=${encodeURIComponent(cleanIp)}&port=${port}`;
                 const apiURL = `${backendApiUrl}${targetURL}`;
                 console.log('Making API call to:', apiURL); // Debug log
-                const response = await fetch(apiURL);
+                
+                // Add timeout to the fetch request
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
+
+                const response = await fetch(apiURL, {
+                    signal: controller.signal,
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                clearTimeout(timeoutId);
 
                 if (!response.ok) {
-                    throw new Error('Failed to fetch player data.');
+                    throw new Error(`API request failed with status ${response.status}: ${response.statusText}`);
                 }
 
                 const data = await response.json();
 
                 if (data.success && data.data) {
-                    setMaxPlayers(data.data.maxplayers);
-                    setNumPlayers(data.data.numplayers);
+                    // Validate the response data
+                    const maxPlayers = typeof data.data.maxplayers === 'number' ? data.data.maxplayers : 0;
+                    const numPlayers = typeof data.data.numplayers === 'number' ? data.data.numplayers : 0;
+                    
+                    setMaxPlayers(maxPlayers);
+                    setNumPlayers(numPlayers);
+                    console.log('Successfully fetched player data:', { numPlayers, maxPlayers });
                 } else {
-                    setError('Server is offline.');
+                    setError('Server is offline or not responding.');
                 }
 
             } catch (err) {
                 console.error('An error occurred while fetching player data:', err);
-                setError('An error occurred while fetching player data.');
+                
+                // Provide more specific error messages
+                if (err instanceof Error) {
+                    if (err.name === 'AbortError') {
+                        setError('Request timed out. Please check your server configuration.');
+                    } else if (err.message.includes('fetch')) {
+                        setError('Network error. Please check your connection and server settings.');
+                    } else {
+                        setError(`Failed to fetch player data: ${err.message}`);
+                    }
+                } else {
+                    setError('An unknown error occurred while fetching player data.');
+                }
             } finally {
                 setLoading(false);
             }
