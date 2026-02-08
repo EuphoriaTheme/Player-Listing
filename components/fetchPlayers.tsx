@@ -46,6 +46,7 @@ interface GameOption {
 
 const fetchPlayers: React.FC = () => {
     const [players, setPlayers] = useState<Player[]>([]);
+    const [playerSearch, setPlayerSearch] = useState<string>('');
     const [maxPlayers, setMaxPlayers] = useState<number>(0);
     const [numPlayers, setNumPlayers] = useState<number>(0);
     const [loading, setLoading] = useState<boolean>(false);
@@ -84,6 +85,12 @@ const fetchPlayers: React.FC = () => {
     const minecraftUuidCache = useRef<Record<string, string>>({});
     const minecraftUuidRequestId = useRef<number>(0);
     const minecraftTpsRequestId = useRef<number>(0);
+
+    const filteredPlayers = useMemo(() => {
+        const query = playerSearch.trim().toLowerCase();
+        if (!query) return players;
+        return players.filter((p) => p.name.toLowerCase().includes(query));
+    }, [players, playerSearch]);
 
     const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -393,8 +400,14 @@ const fetchPlayers: React.FC = () => {
     };
 
     // Save user settings for this server
-    const saveUserSettings = async () => {
+    const saveUserSettings = async (overrides?: { customDomain?: string; customPort?: string | null; selectedGame?: string | null }) => {
         if (!serverUuid) return;
+
+        const customDomainToSave = (overrides?.customDomain ?? customDomain).trim();
+        const rawPortToSave = overrides?.customPort ?? customPort;
+        const customPortToSave = typeof rawPortToSave === 'string' && rawPortToSave.trim() !== '' ? rawPortToSave.trim() : null;
+        const rawSelectedGameToSave = overrides?.selectedGame ?? selectedGame;
+        const selectedGameToSave = typeof rawSelectedGameToSave === 'string' && rawSelectedGameToSave.trim() !== '' ? rawSelectedGameToSave.trim() : null;
         
         try {
             const response = await fetch('/extensions/playerlisting/api/user-settings', {
@@ -406,9 +419,9 @@ const fetchPlayers: React.FC = () => {
                 body: JSON.stringify({
                     user_uuid: 'current_user', // This should be replaced with actual user UUID
                     server_uuid: serverUuid,
-                    custom_domain: customDomain,
-                    custom_port: customPort,
-                    selected_game: selectedGame
+                    custom_domain: customDomainToSave,
+                    custom_port: customPortToSave,
+                    selected_game: selectedGameToSave
                 })
             });
             
@@ -417,12 +430,15 @@ const fetchPlayers: React.FC = () => {
                 if (data.success) {
                     console.log('User settings saved successfully');
                     // Update IP if custom domain is set
-                    if (customDomain) {
-                        setIp(customDomain);
+                    if (customDomainToSave) {
+                        setIp(customDomainToSave);
                     }
                     // Update port if custom port is set
-                    if (customPort) {
-                        setPort(parseInt(customPort, 10));
+                    if (customPortToSave) {
+                        const parsedPort = parseInt(customPortToSave, 10);
+                        if (!isNaN(parsedPort)) {
+                            setPort(parsedPort);
+                        }
                     }
                 } else {
                     console.error('Failed to save user settings:', data.error);
@@ -476,13 +492,21 @@ const fetchPlayers: React.FC = () => {
                 console.log('Available games for egg ID', serverEggId, ':', availableGames); // Debug log
                 setAvailableGames(availableGames);
                 
-                // Auto-select first available game if none selected
-                if (availableGames.length > 0 && !selectedGame) {
-                    setSelectedGame(availableGames[0].id);
+                // If the selected game is missing (or unset), fall back to the first available option.
+                if (availableGames.length > 0) {
+                    const availableIds = new Set(availableGames.map(g => g.id));
+                    if (!selectedGame || !availableIds.has(selectedGame)) {
+                        setSelectedGame(availableGames[0].id);
+                    }
+                } else if (selectedGame) {
+                    setSelectedGame(null);
                 }
             } else {
                 console.log('No server egg ID found');
                 setAvailableGames([]);
+                if (selectedGame) {
+                    setSelectedGame(null);
+                }
             }
         } catch (err) {
             console.error('Failed to fetch available games:', err);
@@ -870,7 +894,7 @@ const fetchPlayers: React.FC = () => {
 
     const handleGameChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
         const gameId = e.target.value;
-        setSelectedGame(gameId);
+        setSelectedGame(gameId || null);
     };
 
     const pingColor = useMemo(() => {
@@ -1137,8 +1161,27 @@ const fetchPlayers: React.FC = () => {
                             <p className="text-gray-400">Please configure a game in the Settings tab.</p>
                         )}
                         {players.length > 0 && !loading && !error && (
+                            <div className="mb-4 space-y-2">
+                                <input
+                                    type="text"
+                                    value={playerSearch}
+                                    onChange={(e) => setPlayerSearch(e.target.value)}
+                                    placeholder="Search players..."
+                                    className="w-full p-2 rounded bg-gray-800 text-white border border-gray-600 focus:border-blue-500 focus:outline-none"
+                                />
+                                {playerSearch.trim() !== '' && (
+                                    <p className="text-xs text-gray-400">
+                                        Showing {filteredPlayers.length} of {players.length}
+                                    </p>
+                                )}
+                            </div>
+                        )}
+                        {players.length > 0 && filteredPlayers.length === 0 && !loading && !error && (
+                            <p className="text-gray-400">No players match your search.</p>
+                        )}
+                        {filteredPlayers.length > 0 && !loading && !error && (
                             <ul className="players-list space-y-4">
-                                {players.map(player => (
+                                {filteredPlayers.map(player => (
                                     <li key={`${player.name}-${player.uuid}`} className="bg-gray-800 p-4 rounded-lg">
                                         <div className="flex items-center justify-between space-x-2">
                                             <div className="flex items-center space-x-4">
@@ -1285,17 +1328,20 @@ const fetchPlayers: React.FC = () => {
                                 {/* Save Button */}
                                 <div className="flex space-x-2">
                                     <button
-                                        onClick={saveUserSettings}
+                                        onClick={() => saveUserSettings()}
                                         className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 focus:outline-none"
                                     >
                                         Save Settings
                                     </button>
                                     <button
                                         onClick={() => {
-                                            setCustomDomain('');
-                                            setCustomPort('');
-                                            setSelectedGame('');
-                                            saveUserSettings();
+                                            const nextDomain = '';
+                                            const nextPort = null;
+                                            const nextGame = null;
+                                            setCustomDomain(nextDomain);
+                                            setCustomPort(nextPort);
+                                            setSelectedGame(nextGame);
+                                            saveUserSettings({ customDomain: nextDomain, customPort: nextPort, selectedGame: nextGame });
                                         }}
                                         className="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700 focus:outline-none"
                                     >

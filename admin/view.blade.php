@@ -385,6 +385,26 @@ document.addEventListener('DOMContentLoaded', async function () {
         }
     });
 
+    const getEggIdFromMapping = (mapping) => {
+        if (!mapping) return null;
+
+        if (typeof mapping === 'string') {
+            const parts = mapping.split('_');
+            if (parts.length >= 2) {
+                const eggId = parseInt(parts[1], 10);
+                return isNaN(eggId) ? null : eggId;
+            }
+            return null;
+        }
+
+        if (typeof mapping === 'object' && mapping.egg_id !== undefined) {
+            const eggId = parseInt(mapping.egg_id, 10);
+            return isNaN(eggId) ? null : eggId;
+        }
+
+        return null;
+    };
+
     // Save mapping
     saveButton.addEventListener('click', async () => {
         const selectedEggOptions = Array.from(eggSelect.selectedOptions);
@@ -399,13 +419,20 @@ document.addEventListener('DOMContentLoaded', async function () {
         const selectedGameId = selectedGameOption.value;
         const selectedGameName = selectedGameOption.textContent;
         const csrfToken = '{{ csrf_token() }}';
+        const selectedEggIds = new Set(selectedEggs.map(egg => parseInt(egg.id, 10)).filter(id => !isNaN(id)));
         
         // Get existing mappings
         const existingMappings = await fetchMappings();
+        const filteredExistingMappings = Array.isArray(existingMappings)
+            ? existingMappings.filter(m => {
+                const eggId = getEggIdFromMapping(m);
+                return eggId === null || !selectedEggIds.has(eggId);
+            })
+            : [];
         
         // Add new mappings
         const newMappings = selectedEggs.map(egg => `${egg.name}_${egg.id}_${selectedGameName}_${selectedGameId}`);
-        const allMappings = [...existingMappings, ...newMappings];
+        const allMappings = [...filteredExistingMappings, ...newMappings];
         
         try {
             const response = await fetch(mappingsUrl, {
@@ -434,13 +461,15 @@ document.addEventListener('DOMContentLoaded', async function () {
     });
 
     // Delete mapping
-    const deleteMapping = async (mapping) => {
+    const deleteMapping = async (eggIdToDelete) => {
         if (!confirm('Are you sure you want to delete this mapping?')) return;
         
         try {
             // Fetch all mappings, remove the selected one, and save
             let mappings = await fetchMappings();
-            mappings = mappings.filter(m => m !== mapping);
+            mappings = Array.isArray(mappings)
+                ? mappings.filter(m => getEggIdFromMapping(m) !== eggIdToDelete)
+                : [];
             
             const csrfToken = '{{ csrf_token() }}';
             const response = await fetch(mappingsUrl, {
@@ -482,13 +511,29 @@ document.addEventListener('DOMContentLoaded', async function () {
         });
         
         mappings.forEach(mapping => {
-            const parts = mapping.split('_');
-            if (parts.length >= 4) {
-                const eggName = parts[0];
-                const eggId = parts[1];
-                const gameName = parts[2];
-                const gameId = parts[3];
-                const gameImage = gameImageMap[gameId];
+            let eggName = null;
+            let eggId = null;
+            let gameName = null;
+            let gameId = null;
+
+            if (typeof mapping === 'string') {
+                const parts = mapping.split('_');
+                if (parts.length >= 4) {
+                    eggName = parts[0];
+                    eggId = parseInt(parts[1], 10);
+                    gameName = parts[2];
+                    gameId = parts[3];
+                }
+            } else if (mapping && typeof mapping === 'object') {
+                eggId = parseInt(mapping.egg_id, 10);
+                gameId = mapping.game_id;
+                gameName = mapping.game_name;
+                eggName = (eggs.find(e => parseInt(e.id, 10) === eggId)?.name) || 'Egg';
+            }
+
+            if (!eggId || !gameId || !gameName) return;
+
+            const gameImage = gameImageMap[gameId];
                 
                 const div = document.createElement('div');
                 div.className = 'mapping-item';
@@ -506,18 +551,18 @@ document.addEventListener('DOMContentLoaded', async function () {
                             <small>-> ${gameName} (${gameId})</small>
                         </div>
                     </div>
-                    <button class="btn btn-danger btn-sm delete-mapping" data-mapping="${mapping}">Delete</button>
+                    <button class="btn btn-danger btn-sm delete-mapping" data-egg-id="${eggId}">Delete</button>
                 `;
                 
                 mappingList.appendChild(div);
-            }
         });
         
         // Add event listeners to delete buttons
         document.querySelectorAll('.delete-mapping').forEach(btn => {
             btn.addEventListener('click', (e) => {
-                const mapping = e.target.getAttribute('data-mapping');
-                deleteMapping(mapping);
+                const eggId = parseInt(e.target.getAttribute('data-egg-id'), 10);
+                if (isNaN(eggId)) return;
+                deleteMapping(eggId);
             });
         });
     };

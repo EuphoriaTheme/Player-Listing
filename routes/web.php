@@ -20,4 +20,3 @@ Route::get('/api/playerlisting/console-config', [Pterodactyl\Http\Controllers\Ad
 // User settings routes
 Route::get('/api/user-settings', [Pterodactyl\Http\Controllers\Admin\Extensions\playerlisting\playerlistingExtensionController::class, 'getUserSettings'])->name('blueprint.extensions.playerlisting.user-settings');
 Route::post('/api/user-settings', [Pterodactyl\Http\Controllers\Admin\Extensions\playerlisting\playerlistingExtensionController::class, 'saveUserSettings'])->name('blueprint.extensions.playerlisting.user-settings.save');
-?>
