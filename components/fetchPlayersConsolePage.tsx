@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import getServer from '@/api/server/getServer';
 import { ServerContext } from '@/state/server';
 import ReactDOM from 'react-dom';
@@ -8,10 +8,16 @@ import ServerContentBlock from '@/components/elements/ServerContentBlock';
 interface Player {
     name: string;
     uuid: string;
-    ping: number;
+    ping: number | null;
     discord?: string;
     steam?: string;
     identifier?: string;
+}
+
+interface MinecraftTps {
+    tps1m: number;
+    tps5m: number;
+    tps15m: number;
 }
 
 interface BannedPlayerInfo {
@@ -49,6 +55,8 @@ const fetchPlayers: React.FC = () => {
     const uuid = ServerContext.useStoreState((state) => state.server.data?.uuid || null);
     const [customPort, setCustomPort] = useState<string | null>(null);
     const [ping, setPing] = useState<number | null>(null);
+    const [tps, setTps] = useState<MinecraftTps | null>(null);
+    const [tpsLoading, setTpsLoading] = useState<boolean>(false);
     const [selectedGame, setSelectedGame] = useState<string | null>(null);
     const [copiedUUIDs, setCopiedUUIDs] = useState<Record<string, boolean>>({});
     const [modalOpen, setModalOpen] = useState(false);
@@ -73,6 +81,197 @@ const fetchPlayers: React.FC = () => {
     const DEFAULT_API_URL = 'https://api.euphoriadevelopment.uk/gameapi';
     const [backendApiUrl, setBackendApiUrl] = useState<string>(DEFAULT_API_URL);
     const serverUuid = uuid;
+
+    // Cache to avoid refetching Minecraft UUIDs on every refresh.
+    const minecraftUuidCache = useRef<Record<string, string>>({});
+    const minecraftUuidRequestId = useRef<number>(0);
+    const minecraftTpsRequestId = useRef<number>(0);
+
+    const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+    const isMinecraftUuid = (value: unknown): value is string => {
+        if (typeof value !== 'string') return false;
+        const normalized = value.replace(/-/g, '');
+        return /^[0-9a-fA-F]{32}$/.test(normalized);
+    };
+
+    const stripMinecraftFormatting = (input: string): string => {
+        // Strip classic Minecraft formatting codes (e.g. \u00A7a)
+        return input.replace(/\u00a7[0-9a-fk-or]/gi, '');
+    };
+
+    const parseMinecraftTps = (logText: string): MinecraftTps | null => {
+        const cleaned = stripMinecraftFormatting(logText);
+        const lines = cleaned.split(/\r?\n/);
+
+        for (let i = lines.length - 1; i >= 0; i--) {
+            const line = lines[i];
+
+            // Paper: "TPS from last 1m, 5m, 15m: 20.0, 20.0, 20.0"
+            if (/TPS from last/i.test(line)) {
+                const match = line.match(/TPS from last\s*1m,\s*5m,\s*15m:\s*([*]?\d+(?:\.\d+)?)\s*,\s*([*]?\d+(?:\.\d+)?)\s*,\s*([*]?\d+(?:\.\d+)?)/i);
+                if (match) {
+                    const tps1m = parseFloat(match[1].replace('*', ''));
+                    const tps5m = parseFloat(match[2].replace('*', ''));
+                    const tps15m = parseFloat(match[3].replace('*', ''));
+                    if ([tps1m, tps5m, tps15m].every((v) => Number.isFinite(v))) {
+                        return { tps1m, tps5m, tps15m };
+                    }
+                }
+            }
+
+            // Generic: "TPS: 20.0"
+            if (/TPS:/i.test(line)) {
+                const match = line.match(/TPS:\s*([*]?\d+(?:\.\d+)?)/i);
+                if (match) {
+                    const tps = parseFloat(match[1].replace('*', ''));
+                    if (Number.isFinite(tps)) {
+                        return { tps1m: tps, tps5m: tps, tps15m: tps };
+                    }
+                }
+            }
+        }
+
+        return null;
+    };
+
+    const fetchMinecraftTps = async () => {
+        if (!serverUuid) return;
+        const requestId = ++minecraftTpsRequestId.current;
+
+        setTpsLoading(true);
+        try {
+            const baseUrl = `${window.location.protocol}//${window.location.host}`;
+
+            // Best-effort: trigger fresh TPS output for Paper servers.
+            try {
+                await fetch(`${baseUrl}/api/client/servers/${serverUuid}/command`, {
+                    method: 'POST',
+                    headers: {
+                        'X-CSRF-TOKEN': csrfToken ?? '',
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                    },
+                    body: JSON.stringify({ command: 'tps' }),
+                });
+            } catch {
+                // Ignore - command endpoint may not exist or server may be offline.
+            }
+
+            // Give the server a moment to write to latest.log.
+            await sleep(750);
+
+            const logResponse = await fetch(`${baseUrl}/api/client/servers/${serverUuid}/files/contents?file=logs/latest.log`, {
+                headers: {
+                    // Try to only read the tail if the backend supports Range requests.
+                    'Range': 'bytes=-32768',
+                    'Accept': 'text/plain',
+                },
+            });
+
+            if (!logResponse.ok) return;
+            const logText = await logResponse.text();
+            const parsed = parseMinecraftTps(logText);
+
+            if (minecraftTpsRequestId.current !== requestId) return;
+            setTps(parsed);
+        } catch (err) {
+            console.error('Failed to fetch Minecraft TPS:', err);
+        } finally {
+            if (minecraftTpsRequestId.current === requestId) {
+                setTpsLoading(false);
+            }
+        }
+    };
+
+    const fetchMinecraftUuids = async (names: string[]): Promise<Record<string, string>> => {
+        const results: Record<string, string> = {};
+        const queue = [...names];
+        const concurrency = Math.min(5, queue.length);
+
+        const worker = async () => {
+            while (queue.length) {
+                const name = queue.shift();
+                if (!name) continue;
+                const cacheKey = name.toLowerCase();
+
+                if (minecraftUuidCache.current[cacheKey]) {
+                    results[cacheKey] = minecraftUuidCache.current[cacheKey];
+                    continue;
+                }
+
+                try {
+                    const uuidResponse = await fetch(`https://playerdb.co/api/player/minecraft/${encodeURIComponent(name)}`);
+                    if (!uuidResponse.ok) continue;
+                    const uuidData = await uuidResponse.json();
+                    const playerUuid = uuidData?.data?.player?.id;
+
+                    if (isMinecraftUuid(playerUuid)) {
+                        minecraftUuidCache.current[cacheKey] = playerUuid;
+                        results[cacheKey] = playerUuid;
+                    }
+                } catch {
+                    continue;
+                }
+            }
+        };
+
+        await Promise.all(Array.from({ length: concurrency }, worker));
+        return results;
+    };
+
+    const upsertMinecraftAvatars = (uuids: string[]) => {
+        const next: Record<string, string> = {};
+        for (const id of uuids) {
+            if (!isMinecraftUuid(id)) continue;
+            next[id] = `https://crafatar.com/avatars/${id}?overlay=true`;
+        }
+
+        if (Object.keys(next).length > 0) {
+            setMinecraftAvatars((prev) => ({ ...prev, ...next }));
+        }
+    };
+
+    const setMinecraftPlayers = (rawPlayers: any[]) => {
+        const basePlayers: Player[] = rawPlayers.map((player: any) => {
+            const name = String(player?.name ?? '');
+            const rawId = player?.raw?.id;
+            const cached = name ? minecraftUuidCache.current[name.toLowerCase()] : undefined;
+            const uuid = (isMinecraftUuid(rawId) ? rawId : cached) ?? '';
+
+            return {
+                name,
+                uuid,
+                ping: null,
+            };
+        });
+
+        setPlayers(basePlayers);
+        upsertMinecraftAvatars(basePlayers.map((p) => p.uuid).filter(Boolean));
+
+        const missingNames = basePlayers
+            .filter((p) => !isMinecraftUuid(p.uuid) && p.name)
+            .map((p) => p.name)
+            .filter((name) => !minecraftUuidCache.current[name.toLowerCase()]);
+
+        if (missingNames.length === 0) return;
+
+        const requestId = ++minecraftUuidRequestId.current;
+        void (async () => {
+            await fetchMinecraftUuids(missingNames);
+            if (minecraftUuidRequestId.current !== requestId) return;
+
+            const hydratedPlayers = basePlayers.map((p) => {
+                const cached = p.name ? minecraftUuidCache.current[p.name.toLowerCase()] : undefined;
+                if (!cached) return p;
+                if (p.uuid === cached) return p;
+                return { ...p, uuid: cached };
+            });
+
+            setPlayers(hydratedPlayers);
+            upsertMinecraftAvatars(hydratedPlayers.map((p) => p.uuid).filter(Boolean));
+        })();
+    };
 
     // Fetch egg-game mappings from admin settings
     const fetchEggGameMappings = async () => {
@@ -332,6 +531,14 @@ const fetchPlayers: React.FC = () => {
         fetchAvailableGames();
     }, [eggGameMappings, mappingsLoading, serverUuid]);
 
+    // Reset TPS state when switching away from Minecraft to avoid showing stale values.
+    useEffect(() => {
+        if (selectedGame !== 'minecraft') {
+            setTps(null);
+            setTpsLoading(false);
+        }
+    }, [selectedGame]);
+
     useEffect(() => {
         const fetchServerData = async () => {
             if (!serverUuid) {
@@ -430,47 +637,23 @@ const fetchPlayers: React.FC = () => {
                         if (data.success && data.data) {
                             const gameData = data.data;
 
+                            setMaxPlayers(gameData.maxplayers);
+                            setNumPlayers(gameData.numplayers);
+                            setPing(gameData.ping);
+                            void fetchMinecraftTps();
+
                             if (Array.isArray(gameData.players)) {
-                                const updatedPlayers = gameData.players.map((player: any) => ({
-                                    name: player.name,
-                                    uuid: player.raw.id,
-                                    ping: 0,
-                                }));
-
-                                setMaxPlayers(gameData.maxplayers);
-                                setNumPlayers(gameData.numplayers);
-                                setPing(gameData.ping);
-
-                                // Fetch UUID and avatars for each player
-                                for (let i = 0; i < gameData.players.length; i++) {
-                                    try {
-                                        const player = gameData.players[i];
-                                        const uuidResponse = await fetch(`https://playerdb.co/api/player/minecraft/${player.name}`);
-
-                                        if (uuidResponse.ok) {
-                                            const uuidData = await uuidResponse.json();
-                                            const playerUuid = uuidData.data.player.id;
-
-                                            if (playerUuid) {
-                                                updatedPlayers[i].uuid = playerUuid;
-
-                                                const avatarUrl = `https://crafatar.com/avatars/${playerUuid}?overlay=true`;
-                                                setMinecraftAvatars((prevAvatars) => ({
-                                                    ...prevAvatars,
-                                                    [playerUuid]: avatarUrl,
-                                                }));
-                                            }
-                                        }
-                                    } catch {
-                                        continue;
-                                    }
-                                }
-
-                                setPlayers(updatedPlayers);
+                                setMinecraftPlayers(gameData.players);
                             } else {
+                                setPlayers([]);
                                 setError('No players found on the server.');
                             }
                         } else {
+                            setTps(null);
+                            setMaxPlayers(0);
+                            setNumPlayers(0);
+                            setPing(null);
+                            setPlayers([]);
                             setError('Server is offline.');
                         }
                     } else if (selectedGame === 'gta5f') {
@@ -483,13 +666,17 @@ const fetchPlayers: React.FC = () => {
 
                             setPlayers(gameData.players.map((player: any) => ({
                                 name: player.name,
-                                uuid: player.raw?.id || 'unknown',
-                                ping: 0,
+                                uuid: player.raw?.id || player.name || 'unknown',
+                                ping: null,
                                 discord: player.raw?.discord || undefined,
                                 steam: player.raw?.steam || undefined,
                                 identifier: player.raw?.identifier || undefined,
                             })));
                         } else {
+                            setMaxPlayers(0);
+                            setNumPlayers(0);
+                            setPing(null);
+                            setPlayers([]);
                             setError('Server is offline.');
                         }
                     } else if (selectedGame === 'beammp') {
@@ -501,12 +688,16 @@ const fetchPlayers: React.FC = () => {
                             setPing(gameData.ping);
 
                             // BeamMP returns players as an array of strings (player names)
-                            setPlayers(gameData.players.map((playerName: string, index: number) => ({
+                            setPlayers(gameData.players.map((playerName: string) => ({
                                 name: playerName,
-                                uuid: `N/A`,
-                                ping: "N/A",
+                                uuid: playerName,
+                                ping: null,
                             })));
                         } else {
+                            setMaxPlayers(0);
+                            setNumPlayers(0);
+                            setPing(null);
+                            setPlayers([]);
                             setError('Server is offline.');
                         }
                     } else {
@@ -519,10 +710,14 @@ const fetchPlayers: React.FC = () => {
 
                             setPlayers(gameData.players.map((player: any) => ({
                                 name: player.name,
-                                uuid: player.raw?.id || 'unknown',
-                                ping: 0,
+                                uuid: player.raw?.id || player.name || 'unknown',
+                                ping: null,
                             })));
                         } else {
+                            setMaxPlayers(0);
+                            setNumPlayers(0);
+                            setPing(null);
+                            setPlayers([]);
                             setError('Server is offline.');
                         }
                     }
@@ -569,7 +764,6 @@ const fetchPlayers: React.FC = () => {
             // Refresh backend configurations first
             await fetchApiUrl();
             await fetchEggGameMappings();
-            await fetchAvailableGames();
 
             // Then fetch fresh player data
             const cleanIp = ip.replace(/^https?:\/\//, '').trim();
@@ -597,47 +791,23 @@ const fetchPlayers: React.FC = () => {
                     if (data.success && data.data) {
                         const gameData = data.data;
 
+                        setMaxPlayers(gameData.maxplayers);
+                        setNumPlayers(gameData.numplayers);
+                        setPing(gameData.ping);
+                        void fetchMinecraftTps();
+
                         if (Array.isArray(gameData.players)) {
-                            const updatedPlayers = gameData.players.map((player: any) => ({
-                                name: player.name,
-                                uuid: player.raw.id,
-                                ping: 0,
-                            }));
-
-                            setMaxPlayers(gameData.maxplayers);
-                            setNumPlayers(gameData.numplayers);
-                            setPing(gameData.ping);
-
-                            // Fetch UUID and avatars for each player
-                            for (let i = 0; i < gameData.players.length; i++) {
-                                try {
-                                    const player = gameData.players[i];
-                                    const uuidResponse = await fetch(`https://playerdb.co/api/player/minecraft/${player.name}`);
-
-                                    if (uuidResponse.ok) {
-                                        const uuidData = await uuidResponse.json();
-                                        const playerUuid = uuidData.data.player.id;
-
-                                        if (playerUuid) {
-                                            updatedPlayers[i].uuid = playerUuid;
-
-                                            const avatarUrl = `https://crafatar.com/avatars/${playerUuid}?overlay=true`;
-                                            setMinecraftAvatars((prevAvatars) => ({
-                                                ...prevAvatars,
-                                                [playerUuid]: avatarUrl,
-                                            }));
-                                        }
-                                    }
-                                } catch {
-                                    continue;
-                                }
-                            }
-
-                            setPlayers(updatedPlayers);
+                            setMinecraftPlayers(gameData.players);
                         } else {
+                            setPlayers([]);
                             setError('No players found on the server.');
                         }
                     } else {
+                        setTps(null);
+                        setMaxPlayers(0);
+                        setNumPlayers(0);
+                        setPing(null);
+                        setPlayers([]);
                         setError('Server is offline.');
                     }
                     } else if (selectedGame === 'gta5f') {
@@ -650,13 +820,17 @@ const fetchPlayers: React.FC = () => {
 
                             setPlayers(gameData.players.map((player: any) => ({
                                 name: player.name,
-                                uuid: player.raw?.id || 'unknown',
-                                ping: 0,
+                                uuid: player.raw?.id || player.name || 'unknown',
+                                ping: null,
                                 discord: player.raw?.discord || undefined,
                                 steam: player.raw?.steam || undefined,
                                 identifier: player.raw?.identifier || undefined,
                             })));
                         } else {
+                            setMaxPlayers(0);
+                            setNumPlayers(0);
+                            setPing(null);
+                            setPlayers([]);
                             setError('Server is offline.');
                         }
                     } else if (selectedGame === 'beammp') {
@@ -668,12 +842,16 @@ const fetchPlayers: React.FC = () => {
                             setPing(gameData.ping);
 
                             // BeamMP returns players as an array of strings (player names)
-                            setPlayers(gameData.players.map((playerName: string, index: number) => ({
+                            setPlayers(gameData.players.map((playerName: string) => ({
                                 name: playerName,
-                                uuid: "N/A",
-                                ping: "N/A",
+                                uuid: playerName,
+                                ping: null,
                             })));
                         } else {
+                            setMaxPlayers(0);
+                            setNumPlayers(0);
+                            setPing(null);
+                            setPlayers([]);
                             setError('Server is offline.');
                         }
                     } else {
@@ -686,10 +864,14 @@ const fetchPlayers: React.FC = () => {
 
                             setPlayers(gameData.players.map((player: any) => ({
                                 name: player.name,
-                                uuid: player.raw?.id || 'unknown',
-                                ping: 0,
+                                uuid: player.raw?.id || player.name || 'unknown',
+                                ping: null,
                             })));
                         } else {
+                            setMaxPlayers(0);
+                            setNumPlayers(0);
+                            setPing(null);
+                            setPlayers([]);
                             setError('Server is offline.');
                         }
                     }
@@ -972,6 +1154,13 @@ const fetchPlayers: React.FC = () => {
                                     <div className={`${pingColor} w-4 h-4 rounded-full mr-2`}></div>
                                     <span className="text-gray-200">{ping !== null ? `${ping} ms` : 'N/A'}</span>
                                 </div>
+                                {selectedGame === 'minecraft' && (
+                                    <div className="flex items-center" title={tps ? `TPS 1m/5m/15m: ${tps.tps1m.toFixed(2)} / ${tps.tps5m.toFixed(2)} / ${tps.tps15m.toFixed(2)}` : undefined}>
+                                        <span className="text-gray-200">
+                                            {tpsLoading ? 'TPS: ...' : tps ? `TPS: ${tps.tps1m.toFixed(2)}` : 'TPS: N/A'}
+                                        </span>
+                                    </div>
+                                )}
                                 <button
                                     onClick={handleRefresh}
                                     className="text-white hover:text-white focus:outline-none"
@@ -990,7 +1179,7 @@ const fetchPlayers: React.FC = () => {
                         {players.length > 0 && !loading && !error && (
                             <ul className="players-list space-y-4">
                                 {players.map(player => (
-                                    <li key={player.uuid} className="bg-gray-800 p-4 rounded-lg">
+                                    <li key={`${player.name}-${player.uuid}`} className="bg-gray-800 p-4 rounded-lg">
                                         <div className="flex items-center justify-between space-x-2">
                                             <div className="flex items-center space-x-4">
                                                 {selectedGame === 'minecraft' && minecraftAvatars[player.uuid] ? (
@@ -1001,14 +1190,21 @@ const fetchPlayers: React.FC = () => {
                                                     />
                                                 ) : null}
                                                 <span className="text-white">{player.name}</span>
-                                                <span className="text-gray-300 text-sm">{player.ping} ms</span>
+                                                <span className="text-gray-300 text-sm">{player.ping !== null ? `${player.ping} ms` : 'N/A'}</span>
                                             </div>
                                             <div className="flex space-x-2">
                                                 <button
                                                     onClick={() => handleCopy(player.uuid, player.name)}
-                                                    className="text-sm bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600"
+                                                    disabled={selectedGame === 'minecraft' && !isMinecraftUuid(player.uuid)}
+                                                    className={`text-sm bg-blue-500 text-white px-2 py-1 rounded ${
+                                                        selectedGame === 'minecraft' && !isMinecraftUuid(player.uuid)
+                                                            ? 'opacity-50 cursor-not-allowed'
+                                                            : 'hover:bg-blue-600'
+                                                    }`}
                                                 >
-                                                    {copiedUUIDs[player.name] ? "Copied!" : "UUID"}
+                                                    {selectedGame === 'minecraft' && !isMinecraftUuid(player.uuid)
+                                                        ? 'UUID N/A'
+                                                        : copiedUUIDs[player.name] ? "Copied!" : "UUID"}
                                                 </button>
                                                 {selectedGame === 'gta5f' && player.discord && (
                                                     <button
@@ -1160,7 +1356,7 @@ const fetchPlayers: React.FC = () => {
                                 onClick={handleCloseModal}
                                 className="absolute top-2 right-2 text-gray-500 hover:text-gray-700"
                             >
-                                ×
+                                x
                             </button>
                             <h2 className="text-lg text-white font-semibold mb-4">Manage {selectedPlayer.name}</h2>
                             
@@ -1221,7 +1417,7 @@ const fetchPlayers: React.FC = () => {
                 {showBannedModal && ReactDOM.createPortal(
                     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
                         <div className="bg-gray-900 rounded-lg p-6 relative shadow-lg" style={{ width: '50rem', maxWidth: '90%' }}>
-                            <button onClick={closeBannedModal} className="absolute top-2 right-2 text-gray-500 hover:text-gray-700">×</button>
+                            <button onClick={closeBannedModal} className="absolute top-2 right-2 text-gray-500 hover:text-gray-700">x</button>
                             <h2 className="text-lg font-semibold mb-4 text-white">Banned Players</h2>
                             <ul>
                                 {bannedPlayers.map((player) => (
@@ -1260,7 +1456,7 @@ const fetchPlayers: React.FC = () => {
                 {showInfoModal && selectedBannedPlayer && ReactDOM.createPortal(
                     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
                         <div className="bg-gray-900 rounded-lg p-6 relative shadow-lg" style={{ width: '50rem', maxWidth: '90%' }}>
-                            <button onClick={closeInfoModal} className="absolute top-2 right-2 text-gray-500 hover:text-gray-700">×</button>
+                            <button onClick={closeInfoModal} className="absolute top-2 right-2 text-gray-500 hover:text-gray-700">x</button>
                             <h2 className="text-lg font-semibold mb-4 text-white">Ban Information</h2>
                             <div className="text-white">
                                 <p><strong>Name:</strong> {selectedBannedPlayer.name}</p>

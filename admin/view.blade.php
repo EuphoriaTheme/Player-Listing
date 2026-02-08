@@ -249,7 +249,32 @@ document.addEventListener('DOMContentLoaded', async function () {
     // Fetch games
     const fetchGames = async () => {
         try {
-            const response = await fetch('https://api.euphoriadevelopment.uk/gameapi/', { method: 'GET' });
+            // Use the configured API URL (if set) so the admin mapping UI matches the frontend.
+            const csrfToken = '{{ csrf_token() }}';
+            let apiBaseUrl = 'https://api.euphoriadevelopment.uk/gameapi';
+
+            try {
+                const apiUrlResponse = await fetch(apiUrlEndpoint, {
+                    method: 'GET',
+                    headers: {
+                        'X-CSRF-TOKEN': csrfToken,
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                    },
+                });
+
+                if (apiUrlResponse.ok) {
+                    const apiUrlData = await apiUrlResponse.json();
+                    const customApiUrl = (apiUrlData.api_url || '').trim();
+                    if (customApiUrl) {
+                        apiBaseUrl = customApiUrl.replace(/\/+$/, '');
+                    }
+                }
+            } catch (e) {
+                console.warn('Failed to fetch custom API URL, using default.', e);
+            }
+
+            const response = await fetch(`${apiBaseUrl}/`, { method: 'GET' });
             if (!response.ok) {
                 throw new Error('Failed to fetch games');
             }
@@ -478,7 +503,7 @@ document.addEventListener('DOMContentLoaded', async function () {
                         ${imageHtml}
                         <div>
                             <strong>${eggName}</strong> (ID: ${eggId})
-                            <small>→ ${gameName} (${gameId})</small>
+                            <small>-> ${gameName} (${gameId})</small>
                         </div>
                     </div>
                     <button class="btn btn-danger btn-sm delete-mapping" data-mapping="${mapping}">Delete</button>

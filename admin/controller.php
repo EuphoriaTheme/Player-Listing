@@ -77,15 +77,34 @@ class playerlistingExtensionController extends Controller
     public function getUserSettings(Request $request): \Illuminate\Http\JsonResponse
     {
         try {
-            $userUuid = $request->input('user_uuid');
             $serverUuid = $request->input('server_uuid');
+
+            // Prefer the authenticated user rather than trusting user-provided identifiers.
+            // Keep a legacy fallback to avoid breaking existing installs that stored settings
+            // under the hardcoded "current_user" key.
+            $requestedUserUuid = $request->input('user_uuid');
+            $userUuid = Auth::user()?->uuid ?? $requestedUserUuid;
             
-            if (!$userUuid || !$serverUuid) {
-                return response()->json(['error' => 'User UUID and Server UUID are required'], 400);
+            if (!$serverUuid) {
+                return response()->json(['error' => 'Server UUID is required'], 400);
+            }
+
+            if (!$userUuid) {
+                return response()->json(['error' => 'User UUID is required'], 400);
             }
 
             $settingsKey = "playerlisting::user_settings_{$userUuid}_{$serverUuid}";
             $settings = $this->settings->get($settingsKey, []);
+
+            // Legacy fallback: if nothing was found under the authenticated key, try the
+            // explicitly-requested key (e.g. "current_user") so older data continues to work.
+            if ((empty($settings) || $settings === '[]' || $settings === '{}') && $requestedUserUuid && $requestedUserUuid !== $userUuid) {
+                $legacyKey = "playerlisting::user_settings_{$requestedUserUuid}_{$serverUuid}";
+                $legacySettings = $this->settings->get($legacyKey, []);
+                if (!empty($legacySettings)) {
+                    $settings = $legacySettings;
+                }
+            }
             
             if (is_string($settings)) {
                 $settings = json_decode($settings, true) ?? [];
@@ -100,18 +119,27 @@ class playerlistingExtensionController extends Controller
     public function saveUserSettings(Request $request): \Illuminate\Http\JsonResponse
     {
         try {
-            $userUuid = $request->input('user_uuid');
             $serverUuid = $request->input('server_uuid');
             $customDomain = $request->input('custom_domain');
             $customPort = $request->input('custom_port');
+            $selectedGame = $request->input('selected_game');
+
+            // Prefer the authenticated user rather than trusting user-provided identifiers.
+            $requestedUserUuid = $request->input('user_uuid');
+            $userUuid = Auth::user()?->uuid ?? $requestedUserUuid;
             
-            if (!$userUuid || !$serverUuid) {
-                return response()->json(['error' => 'User UUID and Server UUID are required'], 400);
+            if (!$serverUuid) {
+                return response()->json(['error' => 'Server UUID is required'], 400);
+            }
+
+            if (!$userUuid) {
+                return response()->json(['error' => 'User UUID is required'], 400);
             }
 
             $settings = [
                 'custom_domain' => $customDomain,
                 'custom_port' => $customPort,
+                'selected_game' => $selectedGame,
                 'updated_at' => now()->toISOString(),
             ];
 
