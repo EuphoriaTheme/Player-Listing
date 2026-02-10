@@ -692,7 +692,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     });
 
     // Save Crafatar API URL
-    saveCrafatarApiUrlBtn.addEventListener('click', async () => {
+    saveCrafatarUrlBtn.addEventListener('click', async () => {
         const crafatarApiUrl = crafatarUrlInput.value.trim();
         const csrfToken = '{{ csrf_token() }}';
         
@@ -775,13 +775,13 @@ document.addEventListener('DOMContentLoaded', async function () {
     });
 
     // Reset Crafatar API URL
-    resetCrafatarApiUrlBtn.addEventListener('click', async () => {
+    resetCrafatarUrlBtn.addEventListener('click', async () => {
         if (!confirm('Are you sure you want to reset the Crafatar API URL to default?')) return;
         
         const csrfToken = '{{ csrf_token() }}';
         
         try {
-            const response = await fetch(crafatarApiUrlEndpoint, {
+            const response = await fetch(crafatarUrlEndpoint, {
                 method: 'DELETE',
                 headers: {
                     'X-CSRF-TOKEN': csrfToken,
@@ -792,7 +792,7 @@ document.addEventListener('DOMContentLoaded', async function () {
             
             const data = await response.json();
             if (data.success) {
-                crafatarApiUrlInput.value = '';
+                crafatarUrlInput.value = '';
                 alert('Crafatar API URL reset to default successfully!');
             } else {
                 alert('Error resetting Crafatar API URL: ' + (data.error || 'Unknown error'));
