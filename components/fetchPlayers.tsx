@@ -78,9 +78,9 @@ const fetchPlayers: React.FC = () => {
 
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
     const DEFAULT_API_URL = 'https://api.euphoriadevelopment.uk/gameapi';
-    const DEFAULT_CRAFTAR_URL = 'https://crafatar.com';
+    const DEFAULT_CRAFATAR_URL = 'https://crafatar.com';
     const [backendApiUrl, setBackendApiUrl] = useState<string>(DEFAULT_API_URL);
-    const [avatarApiUrl, setAvatarApiUrl] = useState<string>(DEFAULT_CRAFTAR_URL);
+    const [avatarApiUrl, setAvatarApiUrl] = useState<string>(DEFAULT_CRAFATAR_URL);
     const serverUuid = uuid;
 
     // Cache to avoid refetching Minecraft UUIDs on every refresh.
@@ -320,18 +320,18 @@ const fetchPlayers: React.FC = () => {
                 const customApiUrl = data.api_url;
                 if (customApiUrl && customApiUrl.trim() !== '') {
                     setAvatarApiUrl(customApiUrl.trim());
-                    console.log('Using custom API URL:', customApiUrl.trim());
+                    console.log('Using custom Crafatar API URL:', customApiUrl.trim());
                 } else {
-                    setAvatarApiUrl(DEFAULT_CRAFTAR_URL);
-                    console.log('Using default API URL:', DEFAULT_CRAFTAR_URL);
+                    setAvatarApiUrl(DEFAULT_CRAFATAR_URL);
+                    console.log('Using default Crafatar API URL:', DEFAULT_CRAFATAR_URL);
                 }
             } else {
-                console.warn('Failed to fetch custom API URL, using default');
-                setAvatarApiUrl(DEFAULT_CRAFTAR_URL);
+                console.warn('Failed to fetch custom Crafatar API URL, using default');
+                setAvatarApiUrl(DEFAULT_CRAFATAR_URL);
             }
         } catch (err) {
-            console.error('Failed to fetch API URL:', err);
-            setAvatarApiUrl(DEFAULT_CRAFTAR_URL);
+            console.error('Failed to fetch Crafatar API URL:', err);
+            setAvatarApiUrl(DEFAULT_CRAFATAR_URL);
         }
     };
 

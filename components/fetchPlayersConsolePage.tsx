@@ -322,18 +322,18 @@ const fetchPlayers: React.FC = () => {
                 const customApiUrl = data.api_url;
                 if (customApiUrl && customApiUrl.trim() !== '') {
                     setCrafatarApiUrl(customApiUrl.trim());
-                    console.log('Using custom API URL:', customApiUrl.trim());
+                    console.log('Using custom crafatar API URL:', customApiUrl.trim());
                 } else {
-                    setCrafatarApiUrl(DEFAULT_API_URL);
-                    console.log('Using default API URL:', DEFAULT_API_URL);
+                    setCrafatarApiUrl(DEFAULT_CRAFATAR_URL);
+                    console.log('Using default crafatar API URL:', DEFAULT_CRAFATAR_URL);
                 }
             } else {
-                console.warn('Failed to fetch custom API URL, using default');
-                setCrafatarApiUrl(DEFAULT_API_URL);
+                console.warn('Failed to fetch custom crafatar API URL, using default');
+                setCrafatarApiUrl(DEFAULT_CRAFATAR_URL);
             }
         } catch (err) {
-            console.error('Failed to fetch API URL:', err);
-            setCrafatarApiUrl(DEFAULT_API_URL);
+            console.error('Failed to fetch crafatar API URL:', err);
+            setCrafatarApiUrl(DEFAULT_CRAFATAR_URL);
         }
     };
 
