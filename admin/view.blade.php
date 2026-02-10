@@ -103,6 +103,20 @@
                     <button type="button" id="reset-api-url" class="btn btn-default">Reset to Default</button>
                 </div>
             </div>
+            <div class="box-body">
+                <div class="form-group">
+                    <label for="crafatar-url">Custom Crafatar URL</label>
+                    <input type="text" id="crafatar-url" class="form-control" placeholder="https://crafatar.com">
+                    <p class="help-block">
+                        Set a custom API URL for the Crafatar service. Leave empty to use the default URL.
+                        <br><strong>Default:</strong> https://crafatar.com
+                    </p>
+                </div>
+                <div class="form-group">
+                    <button type="button" id="save-crafatar-url" class="btn btn-warning">Save API URL</button>
+                    <button type="button" id="reset-crafatar-url" class="btn btn-default">Reset to Default</button>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -573,6 +587,12 @@ document.addEventListener('DOMContentLoaded', async function () {
     const resetApiUrlBtn = document.getElementById('reset-api-url');
     const apiUrlEndpoint = '/extensions/playerlisting/admin/api-url';
 
+    // Crafatar URL Management
+    const crafatarUrlInput = document.getElementById('crafatar-url');
+    const saveCrafatarUrlBtn = document.getElementById('save-crafatar-url');
+    const resetCrafatarUrlBtn = document.getElementById('reset-crafatar-url');
+    const crafatarUrlEndpoint = '/extensions/playerlisting/admin/crafatar-url';
+
     // Console Configuration Management
     const showConsolePlayersCheckbox = document.getElementById('show-console-players');
     const saveConsoleConfigBtn = document.getElementById('save-console-config');
@@ -597,6 +617,28 @@ document.addEventListener('DOMContentLoaded', async function () {
             }
         } catch (e) {
             console.error('Error fetching API URL:', e);
+        }
+    };
+
+    // Fetch current Crafatar API URL
+    const fetchCrafatarApiUrl = async () => {
+        try {
+            const csrfToken = '{{ csrf_token() }}';
+            const response = await fetch(crafatarUrlEndpoint, {
+                method: 'GET',
+                headers: {
+                    'X-CSRF-TOKEN': csrfToken,
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                crafatarUrlInput.value = data.api_url || '';
+            }
+        } catch (e) {
+            console.error('Error fetching Crafatar API URL:', e);
         }
     };
 
@@ -646,6 +688,33 @@ document.addEventListener('DOMContentLoaded', async function () {
         } catch (e) {
             console.error('Error saving API URL:', e);
             alert('Error saving API URL: ' + e.message);
+        }
+    });
+
+    // Save Crafatar API URL
+    saveCrafatarApiUrlBtn.addEventListener('click', async () => {
+        const crafatarApiUrl = crafatarUrlInput.value.trim();
+        const csrfToken = '{{ csrf_token() }}';
+        
+        try {
+            const response = await fetch(crafatarUrlEndpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': csrfToken,
+                },
+                body: JSON.stringify({ api_url: crafatarApiUrl }),
+            });
+            
+            const data = await response.json();
+            if (data.success) {
+                alert('Crafatar API URL saved successfully!');
+            } else {
+                alert('Error saving Crafatar API URL: ' + (data.error || 'Unknown error'));
+            }
+        } catch (e) {
+            console.error('Error saving Crafatar API URL:', e);
+            alert('Error saving Crafatar API URL: ' + e.message);
         }
     });
 
@@ -705,6 +774,35 @@ document.addEventListener('DOMContentLoaded', async function () {
         }
     });
 
+    // Reset Crafatar API URL
+    resetCrafatarApiUrlBtn.addEventListener('click', async () => {
+        if (!confirm('Are you sure you want to reset the Crafatar API URL to default?')) return;
+        
+        const csrfToken = '{{ csrf_token() }}';
+        
+        try {
+            const response = await fetch(crafatarApiUrlEndpoint, {
+                method: 'DELETE',
+                headers: {
+                    'X-CSRF-TOKEN': csrfToken,
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            const data = await response.json();
+            if (data.success) {
+                crafatarApiUrlInput.value = '';
+                alert('Crafatar API URL reset to default successfully!');
+            } else {
+                alert('Error resetting Crafatar API URL: ' + (data.error || 'Unknown error'));
+            }
+        } catch (e) {
+            console.error('Error resetting Crafatar API URL:', e);
+            alert('Error resetting Crafatar API URL: ' + e.message);
+        }
+    });
+
     // Initial load
     try {
         eggs = await fetchEggs();
@@ -740,6 +838,13 @@ document.addEventListener('DOMContentLoaded', async function () {
         await fetchApiUrl();
     } catch (e) {
         console.error('Failed to load API URL:', e);
+    }
+
+    // Load current Crafatar API URL
+    try {
+        await fetchCrafatarApiUrl();
+    } catch (e) {
+        console.error('Failed to load Crafatar API URL:', e);
     }
 
     // Load current console configuration
