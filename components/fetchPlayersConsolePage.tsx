@@ -579,6 +579,7 @@ const fetchPlayers: React.FC = () => {
     useEffect(() => {
         fetchEggGameMappings();
         fetchApiUrl();
+        fetchCrafatarApiUrl();
         loadUserSettings();
         fetchConsoleConfig();
     }, []);
@@ -820,6 +821,7 @@ const fetchPlayers: React.FC = () => {
         try {
             // Refresh backend configurations first
             await fetchApiUrl();
+            await fetchCrafatarApiUrl();
             await fetchEggGameMappings();
 
             // Then fetch fresh player data
