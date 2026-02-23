@@ -405,8 +405,9 @@ const fetchPlayers: React.FC = () => {
     const upsertMinecraftAvatars = (uuids: string[]) => {
         const next: Record<string, string> = {};
         for (const id of uuids) {
-            if (!isMinecraftUuid(id)) continue;
-            next[id] = `${crafatarApiUrl}/avatars/${id}?overlay=true`;
+            const identifier = String(id || '').trim();
+            if (!identifier) continue;
+            next[id] = `${crafatarApiUrl}/avatars/${encodeURIComponent(identifier)}?overlay=true`;
         }
 
         if (Object.keys(next).length > 0) {
@@ -417,9 +418,10 @@ const fetchPlayers: React.FC = () => {
     const setMinecraftPlayers = (rawPlayers: any[]) => {
         const basePlayers: Player[] = rawPlayers.map((player: any) => {
             const name = String(player?.name ?? '');
-            const rawId = player?.raw?.id;
+            const rawIdCandidates = [player?.raw?.id, player?.raw?.uuid, player?.id, player?.uuid];
+            const rawId = rawIdCandidates.find((candidate) => isMinecraftUuid(candidate));
             const cached = name ? minecraftUuidCache.current[name.toLowerCase()] : undefined;
-            const uuid = (isMinecraftUuid(rawId) ? rawId : cached) ?? '';
+            const uuid = (typeof rawId === 'string' ? rawId : cached) ?? name;
 
             return {
                 name,
