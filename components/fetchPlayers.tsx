@@ -314,6 +314,8 @@ const fetchPlayers: React.FC = () => {
     };
 
     const fetchMinecraftTps = async () => {
+        const normalizedSelectedGame = (selectedGame || '').trim().toLowerCase();
+        if (normalizedSelectedGame !== 'minecraft') return;
         if (!serverUuid) return;
         const requestId = ++minecraftTpsRequestId.current;
 
@@ -806,14 +808,17 @@ const fetchPlayers: React.FC = () => {
                 console.log('Available games for egg ID', serverEggId, ':', availableGames); // Debug log
                 setAvailableGames(availableGames);
                 
-                // If the selected game is missing (or unset), fall back to the first available option.
+                // Keep current selection if valid; otherwise fall back to the first available option.
                 if (availableGames.length > 0) {
-                    const availableIds = new Set(availableGames.map(g => g.id));
-                    if (!selectedGame || !availableIds.has(selectedGame)) {
-                        setSelectedGame(availableGames[0].id);
-                    }
-                } else if (selectedGame) {
-                    setSelectedGame(null);
+                    const availableIds = new Set(availableGames.map((g) => g.id));
+                    setSelectedGame((previousSelectedGame) => {
+                        if (previousSelectedGame && availableIds.has(previousSelectedGame)) {
+                            return previousSelectedGame;
+                        }
+                        return availableGames[0].id;
+                    });
+                } else {
+                    setSelectedGame((previousSelectedGame) => (previousSelectedGame ? null : previousSelectedGame));
                 }
             } else {
                 console.log('No server egg ID found');
@@ -827,14 +832,19 @@ const fetchPlayers: React.FC = () => {
         }
     };
 
-    // Load mappings, API URL, and user settings on component mount
+    // Load mappings and API configuration on component mount
     useEffect(() => {
         fetchEggGameMappings();
         fetchApiUrl();
         fetchCrafatarApiUrl();
         fetchRconConfig();
-        loadUserSettings();
     }, []);
+
+    // Load user settings once server UUID is available.
+    useEffect(() => {
+        if (!serverUuid) return;
+        loadUserSettings();
+    }, [serverUuid]);
 
     // Update available games when mappings change
     useEffect(() => {
@@ -989,7 +999,6 @@ const fetchPlayers: React.FC = () => {
 
                             applyPlayerCounts(gameData.numplayers, gameData.maxplayers);
                             setPing(gameData.ping);
-                            void fetchMinecraftTps();
 
                             if (Array.isArray(gameData.players)) {
                                 setMinecraftPlayers(gameData.players);
@@ -1185,7 +1194,6 @@ const fetchPlayers: React.FC = () => {
 
                         applyPlayerCounts(gameData.numplayers, gameData.maxplayers);
                         setPing(gameData.ping);
-                        void fetchMinecraftTps();
 
                         if (Array.isArray(gameData.players)) {
                             setMinecraftPlayers(gameData.players);
@@ -1301,6 +1309,8 @@ const fetchPlayers: React.FC = () => {
         if (ping < 100) return 'bg-orange-500';
         return 'bg-red-500';
     }, [ping]);
+
+    const isJavaMinecraftSelected = (selectedGame || '').trim().toLowerCase() === 'minecraft';
 
     const handleCopy = (identifier: string, label: string) => {
         const cleanedIdentifier = identifier.includes(":") ? identifier.split(":")[1] : identifier;
@@ -1536,12 +1546,21 @@ const fetchPlayers: React.FC = () => {
                                     <div className={`${pingColor} w-4 h-4 rounded-full mr-2`}></div>
                                     <span className="text-gray-200">{ping !== null ? `${ping} ms` : 'N/A'}</span>
                                 </div>
-                                {selectedGame === 'minecraft' && (
+                                {isJavaMinecraftSelected && (
                                     <div className="flex items-center" title={tps ? `TPS 1m/5m/15m: ${tps.tps1m.toFixed(2)} / ${tps.tps5m.toFixed(2)} / ${tps.tps15m.toFixed(2)}` : undefined}>
                                         <span className="text-gray-200">
                                             {tpsLoading ? 'TPS: ...' : tps ? `TPS: ${tps.tps1m.toFixed(2)}` : 'TPS: N/A'}
                                         </span>
                                     </div>
+                                )}
+                                {isJavaMinecraftSelected && (
+                                    <button
+                                        onClick={() => void fetchMinecraftTps()}
+                                        disabled={tpsLoading}
+                                        className="text-xs bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        Check TPS
+                                    </button>
                                 )}
                                 <button
                                     onClick={handleRefresh}
