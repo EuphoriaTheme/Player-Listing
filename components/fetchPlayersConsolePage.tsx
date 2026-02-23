@@ -3,6 +3,11 @@ import getServer from '@/api/server/getServer';
 import { ServerContext } from '@/state/server';
 import ReactDOM from 'react-dom';
 import ServerContentBlock from '@/components/elements/ServerContentBlock';
+import { getDefaultRconPlayersCommand } from './gameHandlers';
+import { postRconJson } from './rconApi';
+import { parseRconPort, shouldUseRconForGame } from './rconConnection';
+import { getCachedServer } from './serverCache';
+import { extractMaxPlayersFromPanelServer, extractMaxPlayersFromStartupPayload, resolveStableMaxPlayers } from './maxPlayersResolver';
 
 // Define interfaces
 interface Player {
@@ -75,8 +80,17 @@ const fetchPlayers: React.FC = () => {
     const [activeTab, setActiveTab] = useState<'server' | 'settings'>('server');
     const [customDomain, setCustomDomain] = useState<string>('');
     const [settingsLoading, setSettingsLoading] = useState<boolean>(true);
+    const [rconFeatureEnabled, setRconFeatureEnabled] = useState<boolean>(false);
+    const [rconEnabled, setRconEnabled] = useState<boolean>(false);
+    const [rconHost, setRconHost] = useState<string>('');
+    const [rconPort, setRconPort] = useState<string>('');
+    const [rconPassword, setRconPassword] = useState<string>('');
+    const [rconType, setRconType] = useState<'source' | 'minecraft'>('source');
+    const [rconCommand, setRconCommand] = useState<string>('status');
+    const [rconStatus, setRconStatus] = useState<string>('');
     const [consoleConfigLoading, setConsoleConfigLoading] = useState<boolean>(true);
     const [showOnConsole, setShowOnConsole] = useState<boolean>(false);
+    const [panelMaxPlayers, setPanelMaxPlayers] = useState<number>(0);
 
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
     const DEFAULT_API_URL = 'https://api.euphoriadevelopment.uk/gameapi';
@@ -89,6 +103,8 @@ const fetchPlayers: React.FC = () => {
     const minecraftUuidCache = useRef<Record<string, string>>({});
     const minecraftUuidRequestId = useRef<number>(0);
     const minecraftTpsRequestId = useRef<number>(0);
+    const playersFetchInProgressRef = useRef<boolean>(false);
+    const playersConsecutiveFailuresRef = useRef<number>(0);
 
     const filteredPlayers = useMemo(() => {
         const query = playerSearch.trim().toLowerCase();
@@ -142,6 +158,161 @@ const fetchPlayers: React.FC = () => {
         }
 
         return null;
+    };
+
+    const shouldUseRconForPlayerFetching = (gameId: string | null): boolean => {
+        return shouldUseRconForGame({
+            gameId,
+            rconFeatureEnabled,
+            rconEnabled,
+            host: rconHost,
+            password: rconPassword,
+            port: rconPort,
+        });
+    };
+
+    const parsePlayerNamesFromText = (value: unknown): string[] => {
+        if (typeof value !== 'string') return [];
+
+        const trimmed = value.trim();
+        if (!trimmed) return [];
+
+        const withoutPrefix = trimmed.includes(':') ? trimmed.split(':').slice(1).join(':').trim() : trimmed;
+        if (!withoutPrefix) return [];
+
+        return withoutPrefix
+            .split(',')
+            .map((name) => name.trim())
+            .filter((name) => name.length > 0 && !/^none$/i.test(name));
+    };
+
+    const normalizeGamePlayers = (gameData: any): Player[] => {
+        const rawPlayers = Array.isArray(gameData?.players)
+            ? gameData.players
+            : Array.isArray(gameData?.player_list)
+                ? gameData.player_list
+                : Array.isArray(gameData?.playernames)
+                    ? gameData.playernames
+                    : [];
+
+        if (rawPlayers.length > 0) {
+            return rawPlayers.map((player: any, index: number) => {
+                if (typeof player === 'string') {
+                    return {
+                        name: player,
+                        uuid: player,
+                        ping: null,
+                    };
+                }
+
+                return {
+                    name: String(player?.name || player?.player || `Player ${index + 1}`),
+                    uuid: String(player?.uuid || player?.id || player?.name || `player-${index + 1}`),
+                    ping: typeof player?.ping === 'number' ? player.ping : null,
+                };
+            });
+        }
+
+        const textCandidates = [
+            gameData?.playerlist,
+            gameData?.player_list_text,
+            gameData?.player_names,
+            gameData?.message,
+            gameData?.response,
+            gameData?.output,
+        ];
+
+        for (const candidate of textCandidates) {
+            const names = parsePlayerNamesFromText(candidate);
+            if (names.length > 0) {
+                return names.map((name) => ({
+                    name,
+                    uuid: name,
+                    ping: null,
+                }));
+            }
+        }
+
+        return [];
+    };
+
+    const applyPlayerCounts = (nextNumPlayers: unknown, nextMaxPlayers: unknown) => {
+        const normalizedNumPlayers = Number(nextNumPlayers);
+        const resolvedNumPlayers = Number.isFinite(normalizedNumPlayers) && normalizedNumPlayers >= 0 ? normalizedNumPlayers : 0;
+        const normalizedMaxPlayers = Number(nextMaxPlayers);
+
+        setNumPlayers(resolvedNumPlayers);
+        setMaxPlayers((previousMaxPlayers: number) => resolveStableMaxPlayers(
+            normalizedMaxPlayers,
+            panelMaxPlayers,
+            previousMaxPlayers,
+            resolvedNumPlayers
+        ));
+    };
+
+    const fetchMaxPlayersFromStartup = async (serverId: string): Promise<number | null> => {
+        try {
+            const baseUrl = `${window.location.protocol}//${window.location.host}`;
+            const response = await fetch(`${baseUrl}/api/client/servers/${serverId}/startup`, {
+                headers: {
+                    'X-CSRF-TOKEN': csrfToken || '',
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json',
+                },
+            });
+
+            if (!response.ok) return null;
+            const payload = await response.json();
+            return extractMaxPlayersFromStartupPayload(payload);
+        } catch {
+            return null;
+        }
+    };
+
+    const fetchPlayersViaRcon = async (gameId: string): Promise<boolean> => {
+        if (!shouldUseRconForPlayerFetching(gameId)) return false;
+
+        const host = rconHost.trim();
+        const password = rconPassword.trim();
+        const parsedPort = parseRconPort(rconPort);
+        const configuredCommand = rconCommand.trim();
+        const command = configuredCommand !== '' && configuredCommand.toLowerCase() !== 'status'
+            ? configuredCommand
+            : getDefaultRconPlayersCommand(gameId);
+
+        setRconStatus(`Fetching players via RCON (${command})...`);
+
+        let payload: any;
+        try {
+            payload = await postRconJson({
+                endpoint: '/extensions/playerlisting/api/rcon/players',
+                csrfToken,
+                payload: {
+                    host,
+                    port: parsedPort,
+                    password,
+                    type: rconType,
+                    game: gameId,
+                    command,
+                },
+                defaultErrorMessage: 'Failed to fetch players via RCON',
+            });
+        } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : 'Failed to fetch players via RCON.';
+            setRconStatus(errorMessage);
+            throw err;
+        }
+
+        const gameData = payload.data || {};
+        const parsedPlayers = normalizeGamePlayers(gameData);
+
+        applyPlayerCounts(Number(gameData.numplayers) || parsedPlayers.length || 0, Number(gameData.maxplayers));
+        setPing(typeof gameData.ping === 'number' ? gameData.ping : null);
+        setTps(null);
+        setPlayers(parsedPlayers);
+
+        setRconStatus('Players fetched via RCON.');
+        return true;
     };
 
     const fetchMinecraftTps = async () => {
@@ -368,6 +539,28 @@ const fetchPlayers: React.FC = () => {
         }
     };
 
+    const fetchRconConfig = async () => {
+        try {
+            const response = await fetch('/extensions/playerlisting/api/playerlisting/rcon-config', {
+                method: 'GET',
+                headers: {
+                    'X-CSRF-TOKEN': csrfToken || '',
+                    'Content-Type': 'application/json',
+                },
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                setRconFeatureEnabled(Boolean(data.enabled));
+            } else {
+                setRconFeatureEnabled(false);
+            }
+        } catch (err) {
+            console.error('Failed to fetch RCON config:', err);
+            setRconFeatureEnabled(false);
+        }
+    };
+
     // Fetch console configuration
     const fetchConsoleConfig = async () => {
         try {
@@ -449,6 +642,23 @@ const fetchPlayers: React.FC = () => {
                         console.log('Loaded selected game:', gameId);
                     }
                 }
+
+                setRconEnabled(Boolean(settings.rcon_enabled));
+                if (typeof settings.rcon_host === 'string') {
+                    setRconHost(settings.rcon_host);
+                }
+                if (typeof settings.rcon_port === 'string' || typeof settings.rcon_port === 'number') {
+                    setRconPort(String(settings.rcon_port));
+                }
+                if (typeof settings.rcon_password === 'string') {
+                    setRconPassword(settings.rcon_password);
+                }
+                if (settings.rcon_type === 'minecraft' || settings.rcon_type === 'source') {
+                    setRconType(settings.rcon_type);
+                }
+                if (typeof settings.rcon_command === 'string' && settings.rcon_command.trim() !== '') {
+                    setRconCommand(settings.rcon_command.trim());
+                }
                 
                 console.log('Loaded user settings:', settings);
             } else {
@@ -462,7 +672,17 @@ const fetchPlayers: React.FC = () => {
     };
 
     // Save user settings for this server
-    const saveUserSettings = async (overrides?: { customDomain?: string; customPort?: string | null; selectedGame?: string | null }) => {
+    const saveUserSettings = async (overrides?: {
+        customDomain?: string;
+        customPort?: string | null;
+        selectedGame?: string | null;
+        rconEnabled?: boolean;
+        rconHost?: string;
+        rconPort?: string;
+        rconPassword?: string;
+        rconType?: 'source' | 'minecraft';
+        rconCommand?: string;
+    }) => {
         if (!serverUuid) return;
 
         const customDomainToSave = (overrides?.customDomain ?? customDomain).trim();
@@ -470,6 +690,12 @@ const fetchPlayers: React.FC = () => {
         const customPortToSave = typeof rawPortToSave === 'string' && rawPortToSave.trim() !== '' ? rawPortToSave.trim() : null;
         const rawSelectedGameToSave = overrides?.selectedGame ?? selectedGame;
         const selectedGameToSave = typeof rawSelectedGameToSave === 'string' && rawSelectedGameToSave.trim() !== '' ? rawSelectedGameToSave.trim() : null;
+        const rconEnabledToSave = Boolean(overrides?.rconEnabled ?? rconEnabled);
+        const rconHostToSave = (overrides?.rconHost ?? rconHost).trim();
+        const rconPortToSave = (overrides?.rconPort ?? rconPort).trim();
+        const rconPasswordToSave = (overrides?.rconPassword ?? rconPassword).trim();
+        const rconTypeToSave = overrides?.rconType ?? rconType;
+        const rconCommandToSave = (overrides?.rconCommand ?? rconCommand).trim();
         
         try {
             const response = await fetch('/extensions/playerlisting/api/user-settings', {
@@ -483,7 +709,13 @@ const fetchPlayers: React.FC = () => {
                     server_uuid: serverUuid,
                     custom_domain: customDomainToSave,
                     custom_port: customPortToSave,
-                    selected_game: selectedGameToSave
+                    selected_game: selectedGameToSave,
+                    rcon_enabled: rconEnabledToSave,
+                    rcon_host: rconEnabledToSave ? rconHostToSave : null,
+                    rcon_port: rconEnabledToSave ? rconPortToSave : null,
+                    rcon_password: rconEnabledToSave ? rconPasswordToSave : null,
+                    rcon_type: rconEnabledToSave ? rconTypeToSave : null,
+                    rcon_command: rconEnabledToSave ? rconCommandToSave : null,
                 })
             });
             
@@ -508,6 +740,55 @@ const fetchPlayers: React.FC = () => {
             }
         } catch (err) {
             console.error('Failed to save user settings:', err);
+        }
+    };
+
+    const fetchRconVariables = async () => {
+        if (!rconFeatureEnabled) {
+            setRconStatus('RCON is disabled by admin.');
+            return;
+        }
+
+        const host = rconHost.trim();
+        const password = rconPassword.trim();
+        const port = parseInt(rconPort.trim(), 10);
+
+        if (!host || !password || Number.isNaN(port) || port < 1 || port > 65535) {
+            setRconStatus('Enter valid RCON host, port, and password first.');
+            return;
+        }
+
+        setRconStatus('Fetching server variables via RCON...');
+
+        try {
+            const data = await postRconJson({
+                endpoint: '/extensions/playerlisting/api/rcon/variables',
+                csrfToken,
+                payload: {
+                    host,
+                    port,
+                    password,
+                    type: rconType,
+                    command: rconCommand.trim() || 'status',
+                },
+                defaultErrorMessage: 'Failed to fetch variables via RCON.',
+            });
+
+            const variables = data.variables || {};
+            const fetchedHost = String(variables.host || variables.ip || '').trim();
+            const fetchedPort = String(variables.queryport || variables.port || variables.hostport || '').trim();
+            const fetchedGame = String(variables.game || variables.game_id || variables.gametype || '').trim().toLowerCase();
+
+            if (fetchedHost) setCustomDomain(fetchedHost);
+            if (fetchedPort) setCustomPort(fetchedPort);
+            if (fetchedGame) setSelectedGame(fetchedGame);
+
+            setRconEnabled(true);
+            setRconStatus('RCON variables fetched successfully. Review values and save settings.');
+        } catch (err) {
+            console.error('Failed to fetch RCON variables:', err);
+            const errorMessage = err instanceof Error ? err.message : 'Failed to fetch variables via RCON.';
+            setRconStatus(errorMessage);
         }
     };
 
@@ -580,6 +861,7 @@ const fetchPlayers: React.FC = () => {
         fetchEggGameMappings();
         fetchApiUrl();
         fetchCrafatarApiUrl();
+        fetchRconConfig();
         loadUserSettings();
         fetchConsoleConfig();
     }, []);
@@ -598,6 +880,18 @@ const fetchPlayers: React.FC = () => {
     }, [selectedGame]);
 
     useEffect(() => {
+        if (!selectedGame) return;
+
+        const current = rconCommand.trim().toLowerCase();
+        if (current === '' || current === 'status') {
+            const suggested = getDefaultRconPlayersCommand(selectedGame);
+            if (suggested !== 'status') {
+                setRconCommand(suggested);
+            }
+        }
+    }, [selectedGame]);
+
+    useEffect(() => {
         const fetchServerData = async () => {
             if (!serverUuid) {
                 setError('Server UUID is not available.');
@@ -607,7 +901,10 @@ const fetchPlayers: React.FC = () => {
 
             setServerDataLoading(true);
             try {
-                const [server] = await getServer(serverUuid);
+                const server = await getCachedServer(serverUuid, async () => {
+                    const [resolvedServer] = await getServer(serverUuid);
+                    return resolvedServer;
+                });
                 const defaultAllocation = server.allocations.find((allocation) => allocation.isDefault);
 
                 if (!defaultAllocation) {
@@ -641,6 +938,16 @@ const fetchPlayers: React.FC = () => {
                 
                 setIp(serverIp);
                 setPort(serverPort);
+
+                const extractedMaxPlayers = extractMaxPlayersFromPanelServer(server);
+                if (extractedMaxPlayers !== null) {
+                    setPanelMaxPlayers(extractedMaxPlayers);
+                } else {
+                    const startupMaxPlayers = await fetchMaxPlayersFromStartup(serverUuid);
+                    if (startupMaxPlayers !== null) {
+                        setPanelMaxPlayers(startupMaxPlayers);
+                    }
+                }
             } catch (error) {
                 console.error('Failed to fetch server details:', error);
                 setError('Failed to fetch server details.');
@@ -657,18 +964,29 @@ const fetchPlayers: React.FC = () => {
     useEffect(() => {
         const fetchPlayersFromAPI = async () => {
             if (serverDataLoading || settingsLoading || !selectedGame) return;
+            if (playersFetchInProgressRef.current) return false;
+
+            playersFetchInProgressRef.current = true;
+            let fetchSucceeded = false;
 
             // Validate IP and port before making API call
             if (!ip || !port || ip.trim() === '' || port <= 0 || port > 65535) {
                 console.warn('Invalid IP or port configuration:', { ip, port });
                 setError('Invalid server configuration.');
-                return;
+                playersFetchInProgressRef.current = false;
+                return false;
             }
 
             setLoading(true);
             setError(null);
 
             try {
+                const usedRcon = await fetchPlayersViaRcon(selectedGame);
+                if (usedRcon) {
+                    fetchSucceeded = true;
+                    return true;
+                }
+
                 // Ensure IP doesn't have protocol prefix and encode it properly
                 const cleanIp = ip.replace(/^https?:\/\//, '').trim();
                 const targetURL = `/${selectedGame}/ip=${encodeURIComponent(cleanIp)}&port=${port}`;
@@ -678,25 +996,28 @@ const fetchPlayers: React.FC = () => {
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
 
-                const response = await fetch(apiURL, {
-                    signal: controller.signal,
-                    headers: {
-                        'Accept': 'application/json',
-                        'Content-Type': 'application/json'
-                    }
-                });
-
-                clearTimeout(timeoutId);
+                let response: Response;
+                try {
+                    response = await fetch(apiURL, {
+                        signal: controller.signal,
+                        headers: {
+                            'Accept': 'application/json',
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                } finally {
+                    clearTimeout(timeoutId);
+                }
 
                 if (response.ok) {
                     const data = await response.json();
+                    const isBedrockGame = ['bedrock', 'minecraftbedrock', 'mcbe', 'mbe'].includes((selectedGame || '').toLowerCase());
 
                     if (selectedGame === 'minecraft') {
                         if (data.success && data.data) {
                             const gameData = data.data;
 
-                            setMaxPlayers(gameData.maxplayers);
-                            setNumPlayers(gameData.numplayers);
+                            applyPlayerCounts(gameData.numplayers, gameData.maxplayers);
                             setPing(gameData.ping);
                             void fetchMinecraftTps();
 
@@ -708,8 +1029,19 @@ const fetchPlayers: React.FC = () => {
                             }
                         } else {
                             setTps(null);
-                            setMaxPlayers(0);
-                            setNumPlayers(0);
+                            applyPlayerCounts(0, 0);
+                            setPing(null);
+                            setPlayers([]);
+                            setError('Server is offline.');
+                        }
+                    } else if (isBedrockGame) {
+                        if (data.success && data.data) {
+                            const gameData = data.data;
+                            applyPlayerCounts(gameData.numplayers, gameData.maxplayers);
+                            setPing(gameData.ping);
+                            setPlayers([]);
+                        } else {
+                            applyPlayerCounts(0, 0);
                             setPing(null);
                             setPlayers([]);
                             setError('Server is offline.');
@@ -718,8 +1050,7 @@ const fetchPlayers: React.FC = () => {
                         // For FiveM servers
                         if (data.success && data.data) {
                             const gameData = data.data;
-                            setMaxPlayers(gameData.maxplayers);
-                            setNumPlayers(gameData.numplayers);
+                            applyPlayerCounts(gameData.numplayers, gameData.maxplayers);
                             setPing(gameData.ping);
 
                             setPlayers(gameData.players.map((player: any) => ({
@@ -731,8 +1062,7 @@ const fetchPlayers: React.FC = () => {
                                 identifier: player.raw?.identifier || undefined,
                             })));
                         } else {
-                            setMaxPlayers(0);
-                            setNumPlayers(0);
+                            applyPlayerCounts(0, 0);
                             setPing(null);
                             setPlayers([]);
                             setError('Server is offline.');
@@ -741,8 +1071,7 @@ const fetchPlayers: React.FC = () => {
                         // For BeamMP servers
                         if (data.success && data.data) {
                             const gameData = data.data;
-                            setMaxPlayers(gameData.maxplayers);
-                            setNumPlayers(gameData.numplayers);
+                            applyPlayerCounts(gameData.numplayers, gameData.maxplayers);
                             setPing(gameData.ping);
 
                             // BeamMP returns players as an array of strings (player names)
@@ -752,8 +1081,7 @@ const fetchPlayers: React.FC = () => {
                                 ping: null,
                             })));
                         } else {
-                            setMaxPlayers(0);
-                            setNumPlayers(0);
+                            applyPlayerCounts(0, 0);
                             setPing(null);
                             setPlayers([]);
                             setError('Server is offline.');
@@ -762,23 +1090,18 @@ const fetchPlayers: React.FC = () => {
                         // For other games
                         if (data.success && data.data) {
                             const gameData = data.data;
-                            setMaxPlayers(gameData.maxplayers);
-                            setNumPlayers(gameData.numplayers);
+                            applyPlayerCounts(gameData.numplayers, gameData.maxplayers);
                             setPing(gameData.ping);
 
-                            setPlayers(gameData.players.map((player: any) => ({
-                                name: player.name,
-                                uuid: player.raw?.id || player.name || 'unknown',
-                                ping: null,
-                            })));
+                            setPlayers(normalizeGamePlayers(gameData));
                         } else {
-                            setMaxPlayers(0);
-                            setNumPlayers(0);
+                            applyPlayerCounts(0, 0);
                             setPing(null);
                             setPlayers([]);
                             setError('Server is offline.');
                         }
                     }
+                    fetchSucceeded = true;
                 } else {
                     throw new Error(`API request failed with status ${response.status}: ${response.statusText}`);
                 }
@@ -799,11 +1122,45 @@ const fetchPlayers: React.FC = () => {
                 }
             } finally {
                 setLoading(false);
+                playersFetchInProgressRef.current = false;
             }
+
+            return fetchSucceeded;
         };
 
-        fetchPlayersFromAPI();
-    }, [serverDataLoading, settingsLoading, ip, port, selectedGame, backendApiUrl]);
+        let cancelled = false;
+        let timer: ReturnType<typeof setTimeout> | null = null;
+
+        const scheduleNextPoll = (success: boolean) => {
+            if (cancelled) return;
+
+            if (success) {
+                playersConsecutiveFailuresRef.current = 0;
+            } else {
+                playersConsecutiveFailuresRef.current += 1;
+            }
+
+            const failureCount = playersConsecutiveFailuresRef.current;
+            const baseDelay = success
+                ? 20_000
+                : Math.min(30_000 * (2 ** Math.min(Math.max(failureCount - 1, 0), 4)), 300_000);
+            const jitter = Math.floor(Math.random() * 5_000);
+            timer = setTimeout(poll, baseDelay + jitter);
+        };
+
+        const poll = async () => {
+            if (cancelled) return;
+            const success = await fetchPlayersFromAPI();
+            scheduleNextPoll(Boolean(success));
+        };
+
+        poll();
+
+        return () => {
+            cancelled = true;
+            if (timer) clearTimeout(timer);
+        };
+    }, [serverDataLoading, settingsLoading, ip, port, selectedGame, backendApiUrl, panelMaxPlayers]);
 
     const handleRefresh = async () => {
         if (serverDataLoading || settingsLoading || !selectedGame) return;
@@ -823,6 +1180,11 @@ const fetchPlayers: React.FC = () => {
             await fetchApiUrl();
             await fetchCrafatarApiUrl();
             await fetchEggGameMappings();
+
+            const usedRcon = await fetchPlayersViaRcon(selectedGame);
+            if (usedRcon) {
+                return;
+            }
 
             // Then fetch fresh player data
             const cleanIp = ip.replace(/^https?:\/\//, '').trim();
@@ -845,13 +1207,13 @@ const fetchPlayers: React.FC = () => {
 
             if (response.ok) {
                 const data = await response.json();
+                const isBedrockGame = ['bedrock', 'minecraftbedrock', 'mcbe', 'mbe'].includes((selectedGame || '').toLowerCase());
 
                 if (selectedGame === 'minecraft') {
                     if (data.success && data.data) {
                         const gameData = data.data;
 
-                        setMaxPlayers(gameData.maxplayers);
-                        setNumPlayers(gameData.numplayers);
+                        applyPlayerCounts(gameData.numplayers, gameData.maxplayers);
                         setPing(gameData.ping);
                         void fetchMinecraftTps();
 
@@ -863,18 +1225,28 @@ const fetchPlayers: React.FC = () => {
                         }
                     } else {
                         setTps(null);
-                        setMaxPlayers(0);
-                        setNumPlayers(0);
+                        applyPlayerCounts(0, 0);
                         setPing(null);
                         setPlayers([]);
                         setError('Server is offline.');
                     }
+                    } else if (isBedrockGame) {
+                        if (data.success && data.data) {
+                            const gameData = data.data;
+                            applyPlayerCounts(gameData.numplayers, gameData.maxplayers);
+                            setPing(gameData.ping);
+                            setPlayers([]);
+                        } else {
+                            applyPlayerCounts(0, 0);
+                            setPing(null);
+                            setPlayers([]);
+                            setError('Server is offline.');
+                        }
                     } else if (selectedGame === 'gta5f') {
                         // For FiveM servers
                         if (data.success && data.data) {
                             const gameData = data.data;
-                            setMaxPlayers(gameData.maxplayers);
-                            setNumPlayers(gameData.numplayers);
+                            applyPlayerCounts(gameData.numplayers, gameData.maxplayers);
                             setPing(gameData.ping);
 
                             setPlayers(gameData.players.map((player: any) => ({
@@ -886,8 +1258,7 @@ const fetchPlayers: React.FC = () => {
                                 identifier: player.raw?.identifier || undefined,
                             })));
                         } else {
-                            setMaxPlayers(0);
-                            setNumPlayers(0);
+                            applyPlayerCounts(0, 0);
                             setPing(null);
                             setPlayers([]);
                             setError('Server is offline.');
@@ -896,8 +1267,7 @@ const fetchPlayers: React.FC = () => {
                         // For BeamMP servers
                         if (data.success && data.data) {
                             const gameData = data.data;
-                            setMaxPlayers(gameData.maxplayers);
-                            setNumPlayers(gameData.numplayers);
+                            applyPlayerCounts(gameData.numplayers, gameData.maxplayers);
                             setPing(gameData.ping);
 
                             // BeamMP returns players as an array of strings (player names)
@@ -907,8 +1277,7 @@ const fetchPlayers: React.FC = () => {
                                 ping: null,
                             })));
                         } else {
-                            setMaxPlayers(0);
-                            setNumPlayers(0);
+                            applyPlayerCounts(0, 0);
                             setPing(null);
                             setPlayers([]);
                             setError('Server is offline.');
@@ -917,18 +1286,12 @@ const fetchPlayers: React.FC = () => {
                         // For other games
                         if (data.success && data.data) {
                             const gameData = data.data;
-                            setMaxPlayers(gameData.maxplayers);
-                            setNumPlayers(gameData.numplayers);
+                            applyPlayerCounts(gameData.numplayers, gameData.maxplayers);
                             setPing(gameData.ping);
 
-                            setPlayers(gameData.players.map((player: any) => ({
-                                name: player.name,
-                                uuid: player.raw?.id || player.name || 'unknown',
-                                ping: null,
-                            })));
+                            setPlayers(normalizeGamePlayers(gameData));
                         } else {
-                            setMaxPlayers(0);
-                            setNumPlayers(0);
+                            applyPlayerCounts(0, 0);
                             setPing(null);
                             setPlayers([]);
                             setError('Server is offline.');
@@ -1258,8 +1621,8 @@ const fetchPlayers: React.FC = () => {
                             <ul className="players-list space-y-4">
                                 {filteredPlayers.map(player => (
                                     <li key={`${player.name}-${player.uuid}`} className="bg-gray-800 p-4 rounded-lg">
-                                        <div className="flex items-center justify-between space-x-2">
-                                            <div className="flex items-center space-x-4">
+                                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                            <div className="flex min-w-0 items-center space-x-4">
                                                 {selectedGame === 'minecraft' && minecraftAvatars[player.uuid] ? (
                                                     <img
                                                         src={minecraftAvatars[player.uuid] || ''}
@@ -1267,10 +1630,14 @@ const fetchPlayers: React.FC = () => {
                                                         className="w-8 h-8 rounded-full"
                                                     />
                                                 ) : null}
-                                                <span className="text-white">{player.name}</span>
-                                                <span className="text-gray-300 text-sm">{player.ping !== null ? `${player.ping} ms` : 'N/A'}</span>
+                                                <span className="text-white shrink-0">{player.name}</span>
+                                                <span className="text-gray-300 text-sm min-w-0 break-all">
+                                                    {['asa', 'ase', 'ark', 'arksa', 'arkse'].includes((selectedGame || '').toLowerCase())
+                                                        ? `(${player.uuid || 'N/A'})`
+                                                        : (player.ping !== null ? `${player.ping} ms` : 'N/A')}
+                                                </span>
                                             </div>
-                                            <div className="flex space-x-2">
+                                            <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                                                 <button
                                                     onClick={() => handleCopy(player.uuid, player.name)}
                                                     disabled={selectedGame === 'minecraft' && !isMinecraftUuid(player.uuid)}
@@ -1413,15 +1780,124 @@ const fetchPlayers: React.FC = () => {
                                             const nextDomain = '';
                                             const nextPort = null;
                                             const nextGame = null;
+                                            const nextRconEnabled = false;
+                                            const nextRconHost = '';
+                                            const nextRconPort = '';
+                                            const nextRconPassword = '';
+                                            const nextRconType: 'source' | 'minecraft' = 'source';
+                                            const nextRconCommand = 'status';
                                             setCustomDomain(nextDomain);
                                             setCustomPort(nextPort);
                                             setSelectedGame(nextGame);
-                                            saveUserSettings({ customDomain: nextDomain, customPort: nextPort, selectedGame: nextGame });
+                                            setRconEnabled(nextRconEnabled);
+                                            setRconHost(nextRconHost);
+                                            setRconPort(nextRconPort);
+                                            setRconPassword(nextRconPassword);
+                                            setRconType(nextRconType);
+                                            setRconCommand(nextRconCommand);
+                                            setRconStatus('');
+                                            saveUserSettings({
+                                                customDomain: nextDomain,
+                                                customPort: nextPort,
+                                                selectedGame: nextGame,
+                                                rconEnabled: nextRconEnabled,
+                                                rconHost: nextRconHost,
+                                                rconPort: nextRconPort,
+                                                rconPassword: nextRconPassword,
+                                                rconType: nextRconType,
+                                                rconCommand: nextRconCommand,
+                                            });
                                         }}
                                         className="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700 focus:outline-none"
                                     >
                                         Reset to Default
                                     </button>
+                                </div>
+
+                                <div className="pt-3 border-t border-gray-700 space-y-3">
+                                    <h4 className="text-md font-semibold text-gray-200">RCON Settings</h4>
+                                    {!rconFeatureEnabled ? (
+                                        <p className="text-xs text-yellow-300">RCON settings are disabled by admin.</p>
+                                    ) : (
+                                        <>
+                                            <label className="inline-flex items-center gap-2 text-sm text-gray-200">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={rconEnabled}
+                                                    onChange={(e) => setRconEnabled(e.target.checked)}
+                                                    className="rounded"
+                                                />
+                                                Enable RCON for this server
+                                            </label>
+
+                                            <div>
+                                                <label className="block text-sm text-gray-200 mb-2">RCON Type</label>
+                                                <select
+                                                    value={rconType}
+                                                    onChange={(e) => setRconType(e.target.value as 'source' | 'minecraft')}
+                                                    className="w-full p-2 rounded bg-gray-800 text-white border border-gray-600 focus:border-blue-500 focus:outline-none"
+                                                >
+                                                    <option value="source">Source / SRCDS</option>
+                                                    <option value="minecraft">Minecraft</option>
+                                                </select>
+                                            </div>
+
+                                            <div>
+                                                <label className="block text-sm text-gray-200 mb-2">RCON Host</label>
+                                                <input
+                                                    type="text"
+                                                    value={rconHost}
+                                                    onChange={(e) => setRconHost(e.target.value)}
+                                                    placeholder="127.0.0.1"
+                                                    className="w-full p-2 rounded bg-gray-800 text-white border border-gray-600 focus:border-blue-500 focus:outline-none"
+                                                />
+                                            </div>
+
+                                            <div>
+                                                <label className="block text-sm text-gray-200 mb-2">RCON Port</label>
+                                                <input
+                                                    type="number"
+                                                    value={rconPort}
+                                                    onChange={(e) => setRconPort(e.target.value)}
+                                                    placeholder="25575"
+                                                    className="w-full p-2 rounded bg-gray-800 text-white border border-gray-600 focus:border-blue-500 focus:outline-none"
+                                                />
+                                            </div>
+
+                                            <div>
+                                                <label className="block text-sm text-gray-200 mb-2">RCON Password</label>
+                                                <input
+                                                    type="password"
+                                                    value={rconPassword}
+                                                    onChange={(e) => setRconPassword(e.target.value)}
+                                                    placeholder="RCON password"
+                                                    className="w-full p-2 rounded bg-gray-800 text-white border border-gray-600 focus:border-blue-500 focus:outline-none"
+                                                />
+                                            </div>
+
+                                            <div>
+                                                <label className="block text-sm text-gray-200 mb-2">Variables Command</label>
+                                                <input
+                                                    type="text"
+                                                    value={rconCommand}
+                                                    onChange={(e) => setRconCommand(e.target.value)}
+                                                    placeholder="status"
+                                                    className="w-full p-2 rounded bg-gray-800 text-white border border-gray-600 focus:border-blue-500 focus:outline-none"
+                                                />
+                                                <p className="text-xs text-gray-400 mt-1">Used when fetching server variables via RCON.</p>
+                                            </div>
+
+                                            <div className="flex items-center gap-2">
+                                                <button
+                                                    onClick={fetchRconVariables}
+                                                    className="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700 focus:outline-none"
+                                                >
+                                                    Fetch Variables via RCON
+                                                </button>
+                                                {rconStatus ? <span className="text-xs text-gray-300">{rconStatus}</span> : null}
+                                            </div>
+                                        </>
+                                    )}
                                 </div>
                             </div>
                         )}

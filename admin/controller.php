@@ -20,6 +20,8 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Exception;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Http\Client\ConnectionException;
 use Pterodactyl\Models\Egg;
 use Pterodactyl\Models\User;
 use Pterodactyl\Models\Server;
@@ -123,6 +125,12 @@ class playerlistingExtensionController extends Controller
             $customDomain = $request->input('custom_domain');
             $customPort = $request->input('custom_port');
             $selectedGame = $request->input('selected_game');
+            $rconEnabled = filter_var($request->input('rcon_enabled', false), FILTER_VALIDATE_BOOLEAN);
+            $rconHost = $request->input('rcon_host');
+            $rconPort = $request->input('rcon_port');
+            $rconPassword = $request->input('rcon_password');
+            $rconType = $request->input('rcon_type', 'source');
+            $rconCommand = $request->input('rcon_command');
 
             // Prefer the authenticated user rather than trusting user-provided identifiers.
             $requestedUserUuid = $request->input('user_uuid');
@@ -140,6 +148,12 @@ class playerlistingExtensionController extends Controller
                 'custom_domain' => $customDomain,
                 'custom_port' => $customPort,
                 'selected_game' => $selectedGame,
+                'rcon_enabled' => $rconEnabled,
+                'rcon_host' => $rconEnabled ? $rconHost : null,
+                'rcon_port' => $rconEnabled ? $rconPort : null,
+                'rcon_password' => $rconEnabled ? $rconPassword : null,
+                'rcon_type' => $rconEnabled ? $rconType : null,
+                'rcon_command' => $rconEnabled ? $rconCommand : null,
                 'updated_at' => now()->toISOString(),
             ];
 
@@ -232,6 +246,200 @@ class playerlistingExtensionController extends Controller
             return response()->json(['success' => true]);
         } catch (\Exception $e) {
             return response()->json(['error' => 'Failed to save console configuration'], 500);
+        }
+    }
+
+    public function getRconConfig(): \Illuminate\Http\JsonResponse
+    {
+        try {
+            $enabled = $this->settings->get('playerlisting::rcon_enabled', false);
+            return response()->json(['enabled' => (bool) $enabled]);
+        } catch (\Exception $e) {
+            return response()->json(['error' => 'Failed to fetch RCON configuration'], 500);
+        }
+    }
+
+    public function saveRconConfig(Request $request): \Illuminate\Http\JsonResponse
+    {
+        try {
+            $enabled = filter_var($request->input('enabled', false), FILTER_VALIDATE_BOOLEAN);
+            $this->settings->set('playerlisting::rcon_enabled', $enabled);
+            return response()->json(['success' => true]);
+        } catch (\Exception $e) {
+            return response()->json(['error' => 'Failed to save RCON configuration'], 500);
+        }
+    }
+
+    public function fetchRconVariables(Request $request): \Illuminate\Http\JsonResponse
+    {
+        try {
+            $rconEnabled = (bool) $this->settings->get('playerlisting::rcon_enabled', false);
+            if (!$rconEnabled) {
+                return response()->json(['success' => false, 'error' => 'RCON is disabled by admin.'], 403);
+            }
+
+            $host = trim((string) $request->input('host', ''));
+            $password = (string) $request->input('password', '');
+            $port = (int) $request->input('port', 0);
+            $type = trim((string) $request->input('type', 'source'));
+            $command = trim((string) $request->input('command', 'status'));
+
+            if ($host === '' || $password === '' || $port < 1 || $port > 65535) {
+                return response()->json(['success' => false, 'error' => 'Valid host, port, and password are required.'], 422);
+            }
+
+            $apiUrl = trim((string) $this->settings->get('playerlisting::api_url', ''));
+            $apiBase = $apiUrl !== '' ? preg_replace('#/gameapi/?$#', '', $apiUrl) : 'https://api.euphoriadevelopment.uk';
+            $target = rtrim((string) $apiBase, '/') . '/rcon/variables';
+
+            $response = Http::acceptJson()->timeout(12)->post($target, [
+                'host' => $host,
+                'port' => $port,
+                'password' => $password,
+                'type' => $type !== '' ? $type : 'source',
+                'command' => $command !== '' ? $command : 'status',
+            ]);
+
+            $contentType = strtolower((string) $response->header('Content-Type', ''));
+            $isJson = str_contains($contentType, 'application/json') || str_contains($contentType, 'text/json');
+
+            if (!$response->successful()) {
+                $error = null;
+
+                if ($isJson) {
+                    $error = $response->json('error');
+                }
+
+                if (!is_string($error) || trim($error) === '') {
+                    $body = trim((string) $response->body());
+                    if ($body !== '') {
+                        if (preg_match('/<title>(.*?)<\/title>/is', $body, $matches)) {
+                            $error = trim(html_entity_decode(strip_tags((string) ($matches[1] ?? ''))));
+                        } else {
+                            $error = trim(substr(strip_tags($body), 0, 200));
+                        }
+                    }
+                }
+
+                if (!is_string($error) || trim($error) === '') {
+                    $error = 'Failed to fetch RCON variables.';
+                }
+
+                if (is_string($error) && preg_match('/Failed all\s+\d+\s+attempts/i', $error)) {
+                    $error = 'RCON is unreachable. The game server may be offline, the RCON port closed, or credentials/type are incorrect.';
+                }
+
+                if ((int) $response->status() === 502 && (!is_string($error) || trim($error) === '' || stripos($error, 'Failed to fetch') !== false)) {
+                    $error = 'RCON gateway returned 502 from upstream API.';
+                }
+
+                return response()->json(['success' => false, 'error' => $error], $response->status());
+            }
+
+            if (!$isJson) {
+                return response()->json(['success' => false, 'error' => 'RCON backend returned a non-JSON response.'], 502);
+            }
+
+            $json = $response->json();
+            if (!is_array($json)) {
+                return response()->json(['success' => false, 'error' => 'RCON backend returned invalid JSON.'], 502);
+            }
+
+            return response()->json($json);
+        } catch (ConnectionException $e) {
+            return response()->json(['success' => false, 'error' => 'RCON backend timed out or is unreachable.'], 504);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'error' => 'Failed to fetch RCON variables'], 500);
+        }
+    }
+
+    public function fetchRconPlayers(Request $request): \Illuminate\Http\JsonResponse
+    {
+        try {
+            $rconEnabled = (bool) $this->settings->get('playerlisting::rcon_enabled', false);
+            if (!$rconEnabled) {
+                return response()->json(['success' => false, 'error' => 'RCON is disabled by admin.'], 403);
+            }
+
+            $host = trim((string) $request->input('host', ''));
+            $password = (string) $request->input('password', '');
+            $port = (int) $request->input('port', 0);
+            $type = trim((string) $request->input('type', 'source'));
+            $game = trim((string) $request->input('game', ''));
+            $command = trim((string) $request->input('command', ''));
+
+            if ($host === '' || $password === '' || $port < 1 || $port > 65535) {
+                return response()->json(['success' => false, 'error' => 'Valid host, port, and password are required.'], 422);
+            }
+
+            $apiUrl = trim((string) $this->settings->get('playerlisting::api_url', ''));
+            $apiBase = $apiUrl !== '' ? preg_replace('#/gameapi/?$#', '', $apiUrl) : 'https://api.euphoriadevelopment.uk';
+            $target = rtrim((string) $apiBase, '/') . '/rcon/players';
+
+            $payload = [
+                'host' => $host,
+                'port' => $port,
+                'password' => $password,
+                'type' => $type !== '' ? $type : 'source',
+                'game' => $game,
+            ];
+
+            if ($command !== '') {
+                $payload['command'] = $command;
+            }
+
+            $response = Http::acceptJson()->timeout(12)->post($target, $payload);
+
+            $contentType = strtolower((string) $response->header('Content-Type', ''));
+            $isJson = str_contains($contentType, 'application/json') || str_contains($contentType, 'text/json');
+
+            if (!$response->successful()) {
+                $error = null;
+
+                if ($isJson) {
+                    $error = $response->json('error');
+                }
+
+                if (!is_string($error) || trim($error) === '') {
+                    $body = trim((string) $response->body());
+                    if ($body !== '') {
+                        if (preg_match('/<title>(.*?)<\/title>/is', $body, $matches)) {
+                            $error = trim(html_entity_decode(strip_tags((string) ($matches[1] ?? ''))));
+                        } else {
+                            $error = trim(substr(strip_tags($body), 0, 200));
+                        }
+                    }
+                }
+
+                if (!is_string($error) || trim($error) === '') {
+                    $error = 'Failed to fetch players via RCON.';
+                }
+
+                if (is_string($error) && preg_match('/Failed all\s+\d+\s+attempts/i', $error)) {
+                    $error = 'RCON is unreachable. The game server may be offline, the RCON port closed, or credentials/type are incorrect.';
+                }
+
+                if ((int) $response->status() === 502 && (!is_string($error) || trim($error) === '' || stripos($error, 'Failed to fetch') !== false)) {
+                    $error = 'RCON gateway returned 502 from upstream API.';
+                }
+
+                return response()->json(['success' => false, 'error' => $error], $response->status());
+            }
+
+            if (!$isJson) {
+                return response()->json(['success' => false, 'error' => 'RCON backend returned a non-JSON response.'], 502);
+            }
+
+            $json = $response->json();
+            if (!is_array($json)) {
+                return response()->json(['success' => false, 'error' => 'RCON backend returned invalid JSON.'], 502);
+            }
+
+            return response()->json($json);
+        } catch (ConnectionException $e) {
+            return response()->json(['success' => false, 'error' => 'RCON backend timed out or is unreachable.'], 504);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'error' => 'Failed to fetch RCON players'], 500);
         }
     }
 }

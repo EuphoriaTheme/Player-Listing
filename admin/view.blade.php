@@ -85,6 +85,30 @@
 
 <div class="row">
     <div class="col-xs-12">
+        <div class="box box-danger">
+            <div class="box-header with-border">
+                <h3 class="box-title">RCON Configuration</h3>
+            </div>
+            <div class="box-body">
+                <div class="form-group">
+                    <label class="checkbox-inline">
+                        <input type="checkbox" id="enable-rcon-user-settings" value="1">
+                        Allow Users to Configure and Use RCON
+                    </label>
+                    <p class="help-block">
+                        When enabled, users can set RCON details in their settings tab and fetch server variables through your API.
+                    </p>
+                </div>
+                <div class="form-group">
+                    <button type="button" id="save-rcon-config" class="btn btn-danger">Save RCON Configuration</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-xs-12">
         <div class="box box-warning">
             <div class="box-header with-border">
                 <h3 class="box-title">API Configuration</h3>
@@ -598,6 +622,11 @@ document.addEventListener('DOMContentLoaded', async function () {
     const saveConsoleConfigBtn = document.getElementById('save-console-config');
     const consoleConfigEndpoint = '/extensions/playerlisting/admin/console-config';
 
+    // RCON Configuration Management
+    const enableRconUserSettingsCheckbox = document.getElementById('enable-rcon-user-settings');
+    const saveRconConfigBtn = document.getElementById('save-rcon-config');
+    const rconConfigEndpoint = '/extensions/playerlisting/admin/rcon-config';
+
     // Fetch current API URL
     const fetchApiUrl = async () => {
         try {
@@ -661,6 +690,28 @@ document.addEventListener('DOMContentLoaded', async function () {
             }
         } catch (e) {
             console.error('Error fetching console config:', e);
+        }
+    };
+
+    // Fetch current RCON configuration
+    const fetchRconConfig = async () => {
+        try {
+            const csrfToken = '{{ csrf_token() }}';
+            const response = await fetch(rconConfigEndpoint, {
+                method: 'GET',
+                headers: {
+                    'X-CSRF-TOKEN': csrfToken,
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                enableRconUserSettingsCheckbox.checked = data.enabled || false;
+            }
+        } catch (e) {
+            console.error('Error fetching RCON config:', e);
         }
     };
 
@@ -742,6 +793,33 @@ document.addEventListener('DOMContentLoaded', async function () {
         } catch (e) {
             console.error('Error saving console configuration:', e);
             alert('Error saving console configuration: ' + e.message);
+        }
+    });
+
+    // Save RCON Configuration
+    saveRconConfigBtn.addEventListener('click', async () => {
+        const enabled = enableRconUserSettingsCheckbox.checked;
+        const csrfToken = '{{ csrf_token() }}';
+
+        try {
+            const response = await fetch(rconConfigEndpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': csrfToken,
+                },
+                body: JSON.stringify({ enabled }),
+            });
+
+            const data = await response.json();
+            if (data.success) {
+                alert('RCON configuration saved successfully!');
+            } else {
+                alert('Error saving RCON configuration: ' + (data.error || 'Unknown error'));
+            }
+        } catch (e) {
+            console.error('Error saving RCON configuration:', e);
+            alert('Error saving RCON configuration: ' + e.message);
         }
     });
 
@@ -852,6 +930,13 @@ document.addEventListener('DOMContentLoaded', async function () {
         await fetchConsoleConfig();
     } catch (e) {
         console.error('Failed to load console configuration:', e);
+    }
+
+    // Load current RCON configuration
+    try {
+        await fetchRconConfig();
+    } catch (e) {
+        console.error('Failed to load RCON configuration:', e);
     }
 });
 </script>
