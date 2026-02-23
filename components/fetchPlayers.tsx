@@ -482,7 +482,7 @@ const fetchPlayers: React.FC = () => {
     // Fetch custom Crafatar API URL from admin settings
     const fetchCrafatarApiUrl = async () => {
         try {
-            const response = await fetch('/extensions/playerlisting/api/playerlisting/avatar-api-url', {
+            const response = await fetch('/extensions/playerlisting/api/playerlisting/crafatar-api-url', {
                 method: 'GET',
                 headers: {
                     'X-CSRF-TOKEN': csrfToken || '',
