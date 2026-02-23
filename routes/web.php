@@ -9,12 +9,18 @@ Route::get('/admin/api-url', [Pterodactyl\Http\Controllers\Admin\Extensions\play
 Route::post('/admin/api-url', [Pterodactyl\Http\Controllers\Admin\Extensions\playerlisting\playerlistingExtensionController::class, 'saveApiUrl'])->name('blueprint.extensions.playerlisting.api-url.save');
 Route::delete('/admin/api-url', [Pterodactyl\Http\Controllers\Admin\Extensions\playerlisting\playerlistingExtensionController::class, 'resetApiUrl'])->name('blueprint.extensions.playerlisting.api-url.reset');
 
+// Crafatar URL configuration routes
+Route::get('/admin/crafatar-url', [Pterodactyl\Http\Controllers\Admin\Extensions\playerlisting\playerlistingExtensionController::class, 'getCrafatarApiUrl'])->name('blueprint.extensions.playerlisting.crafatar-api-url');
+Route::post('/admin/crafatar-url', [Pterodactyl\Http\Controllers\Admin\Extensions\playerlisting\playerlistingExtensionController::class, 'saveCrafatarApiUrl'])->name('blueprint.extensions.playerlisting.crafatar-api-url.save');
+Route::delete('/admin/crafatar-url', [Pterodactyl\Http\Controllers\Admin\Extensions\playerlisting\playerlistingExtensionController::class, 'resetCrafatarApiUrl'])->name('blueprint.extensions.playerlisting.crafatar-api-url.reset');
+
 // Console configuration routes
 Route::get('/admin/console-config', [Pterodactyl\Http\Controllers\Admin\Extensions\playerlisting\playerlistingExtensionController::class, 'getConsoleConfig'])->name('blueprint.extensions.playerlisting.console-config');
 Route::post('/admin/console-config', [Pterodactyl\Http\Controllers\Admin\Extensions\playerlisting\playerlistingExtensionController::class, 'saveConsoleConfig'])->name('blueprint.extensions.playerlisting.console-config.save');
 
 // Frontend API URL access (accessible from server pages)
 Route::get('/api/playerlisting/api-url', [Pterodactyl\Http\Controllers\Admin\Extensions\playerlisting\playerlistingExtensionController::class, 'getApiUrl'])->name('blueprint.extensions.playerlisting.frontend.api-url');
+Route::get('/api/playerlisting/crafatar-api-url', [Pterodactyl\Http\Controllers\Admin\Extensions\playerlisting\playerlistingExtensionController::class, 'getCrafatarApiUrl'])->name('blueprint.extensions.playerlisting.frontend.crafatar-api-url');
 Route::get('/api/playerlisting/console-config', [Pterodactyl\Http\Controllers\Admin\Extensions\playerlisting\playerlistingExtensionController::class, 'getConsoleConfig'])->name('blueprint.extensions.playerlisting.frontend.console-config');
 
 // User settings routes

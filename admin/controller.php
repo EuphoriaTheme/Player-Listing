@@ -152,6 +152,37 @@ class playerlistingExtensionController extends Controller
         }
     }
 
+    public function getCrafatarApiUrl(): \Illuminate\Http\JsonResponse
+    {
+        try {
+            $apiUrl = $this->settings->get('playerlisting::crafatar_api_url', '');
+            return response()->json(['api_url' => $apiUrl]);
+        } catch (\Exception $e) {
+            return response()->json(['error' => 'Failed to fetch CRAFATAR API URL'], 500);
+        }
+    }
+
+    public function saveCrafatarApiUrl(Request $request): \Illuminate\Http\JsonResponse
+    {
+        try {
+            $apiUrl = $request->input('api_url', '');
+            $this->settings->set('playerlisting::crafatar_api_url', $apiUrl);
+            return response()->json(['success' => true]);
+        } catch (\Exception $e) {
+            return response()->json(['error' => 'Failed to save CRAFATAR API URL'], 500);
+        }
+    }
+
+    public function resetCrafatarApiUrl(): \Illuminate\Http\JsonResponse
+    {
+        try {
+            $this->settings->forget('playerlisting::crafatar_api_url');
+            return response()->json(['success' => true]);
+        } catch (\Exception $e) {
+            return response()->json(['error' => 'Failed to reset CRAFATAR API URL'], 500);
+        }
+    }
+
     public function getApiUrl(): \Illuminate\Http\JsonResponse
     {
         try {

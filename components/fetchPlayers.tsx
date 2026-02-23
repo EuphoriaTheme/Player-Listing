@@ -78,7 +78,9 @@ const fetchPlayers: React.FC = () => {
 
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
     const DEFAULT_API_URL = 'https://api.euphoriadevelopment.uk/gameapi';
+    const DEFAULT_CRAFATAR_URL = 'https://crafatar.com';
     const [backendApiUrl, setBackendApiUrl] = useState<string>(DEFAULT_API_URL);
+    const [avatarApiUrl, setAvatarApiUrl] = useState<string>(DEFAULT_CRAFATAR_URL);
     const serverUuid = uuid;
 
     // Cache to avoid refetching Minecraft UUIDs on every refresh.
@@ -229,7 +231,7 @@ const fetchPlayers: React.FC = () => {
         const next: Record<string, string> = {};
         for (const id of uuids) {
             if (!isMinecraftUuid(id)) continue;
-            next[id] = `https://crafatar.com/avatars/${id}?overlay=true`;
+            next[id] = `${avatarApiUrl}/avatars/${id}?overlay=true`;
         }
 
         if (Object.keys(next).length > 0) {
@@ -299,6 +301,37 @@ const fetchPlayers: React.FC = () => {
             console.error('Failed to fetch egg-game mappings:', err);
         } finally {
             setMappingsLoading(false);
+        }
+    };
+
+    // Fetch custom Crafatar API URL from admin settings
+    const fetchCrafatarApiUrl = async () => {
+        try {
+            const response = await fetch('/extensions/playerlisting/api/playerlisting/avatar-api-url', {
+                method: 'GET',
+                headers: {
+                    'X-CSRF-TOKEN': csrfToken || '',
+                    'Content-Type': 'application/json',
+                },
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                const customApiUrl = data.api_url;
+                if (customApiUrl && customApiUrl.trim() !== '') {
+                    setAvatarApiUrl(customApiUrl.trim());
+                    console.log('Using custom Crafatar API URL:', customApiUrl.trim());
+                } else {
+                    setAvatarApiUrl(DEFAULT_CRAFATAR_URL);
+                    console.log('Using default Crafatar API URL:', DEFAULT_CRAFATAR_URL);
+                }
+            } else {
+                console.warn('Failed to fetch custom Crafatar API URL, using default');
+                setAvatarApiUrl(DEFAULT_CRAFATAR_URL);
+            }
+        } catch (err) {
+            console.error('Failed to fetch Crafatar API URL:', err);
+            setAvatarApiUrl(DEFAULT_CRAFATAR_URL);
         }
     };
 
@@ -517,6 +550,7 @@ const fetchPlayers: React.FC = () => {
     useEffect(() => {
         fetchEggGameMappings();
         fetchApiUrl();
+        fetchCrafatarApiUrl();
         loadUserSettings();
     }, []);
 
@@ -757,6 +791,7 @@ const fetchPlayers: React.FC = () => {
         try {
             // Refresh backend configurations first
             await fetchApiUrl();
+            await fetchCrafatarApiUrl();
             await fetchEggGameMappings();
 
             // Then fetch fresh player data
@@ -1051,7 +1086,7 @@ const fetchPlayers: React.FC = () => {
 
                 const playersWithAvatars = await Promise.all(
                     bannedData.map(async (player: { uuid: string; name: string; created: string; source: string; expires: string; reason: string }) => {
-                        const avatarUrl = `https://crafatar.com/avatars/${player.uuid}?overlay=true`;
+                        const avatarUrl = `${avatarApiUrl}/avatars/${player.uuid}?overlay=true`;
                         return {
                             name: player.name,
                             uuid: player.uuid,
@@ -1370,7 +1405,7 @@ const fetchPlayers: React.FC = () => {
                             {selectedPlayer.uuid && (
                                 <div className="flex justify-center mb-4">
                                     <img
-                                        src={`https://crafatar.com/renders/body/${selectedPlayer.uuid}?overlay=true`}
+                                        src={`${avatarApiUrl}/renders/body/${selectedPlayer.uuid}?overlay=true`}
                                         alt={`${selectedPlayer.name}'s 3D model`}
                                         className="w-32"
                                     />
