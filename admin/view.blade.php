@@ -133,7 +133,7 @@
                     <input type="text" id="crafatar-url" class="form-control" placeholder="https://crafatar.com">
                     <p class="help-block">
                         Set a custom API URL for the Crafatar service. Leave empty to use the default URL.
-                        <br><strong>Default:</strong> https://crafatar.com
+                        <br><strong>Default:</strong> https://nitrocraft.uk
                     </p>
                 </div>
                 <div class="form-group">
