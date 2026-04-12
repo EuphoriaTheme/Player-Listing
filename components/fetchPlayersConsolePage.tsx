@@ -94,7 +94,7 @@ const fetchPlayers: React.FC = () => {
 
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
     const DEFAULT_API_URL = 'https://api.euphoriadevelopment.uk/gameapi';
-    const DEFAULT_CRAFATAR_URL = 'https://crafatar.com';
+    const DEFAULT_CRAFATAR_URL = 'https://nitrocraft.uk';
     const [backendApiUrl, setBackendApiUrl] = useState<string>(DEFAULT_API_URL);
     const [crafatarApiUrl, setCrafatarApiUrl] = useState<string>(DEFAULT_CRAFATAR_URL);
     const serverUuid = uuid;
